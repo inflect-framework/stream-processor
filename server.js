@@ -3,11 +3,13 @@ const cors = require('cors')
 const consumer = require('./consumer')
 const bodyParser = require('body-parser')
 const addTransformation = require('./addTransformation')
+const runConnections = require('./runRegisteredConnections')
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json())
 
+runConnections();
 
 app.post('/createTransformation', (req, res) => {
   const {sourceTopic, targetTopic, transformation} = req.body;
