@@ -1,9 +1,8 @@
 const { Kafka } = require('kafkajs');
-const { dotenv } = require('dotenv').config();
+const dotenv = require('dotenv').config();
 const APIKEY = process.env.APIKEY;
 const APISECRET = process.env.APISECRET;
-const BROKER = process.env.BROKER
-
+const BROKER = process.env.BROKER;
 
 const kafka = new Kafka({
   clientId: 'my-consumer',
@@ -16,44 +15,73 @@ const kafka = new Kafka({
   }
 });
 
-
 const consumer = kafka.consumer({ groupId: 'my-group' });
 const producer = kafka.producer();
+
+const processBatch = async (messages, transformation, targetTopic) => {
+  const transformedMessages = messages.map(({ key, value }) => {
+    const transformedValue = transformation(value);
+    return { key, value: transformedValue };
+  });
+
+  await producer.send({
+    topic: targetTopic,
+    messages: transformedMessages,
+  });
+
+  console.log(`Produced ${transformedMessages.length} transformed messages`);
+};
 
 const run = async (sourceTopic, targetTopic, transformationName) => {
   await consumer.connect();
   await producer.connect();
   await consumer.subscribe({ topic: sourceTopic, fromBeginning: true });
 
+  const transformation = require(`./transformations/${transformationName}`);
 
-    // const res = await pool.query(query, [transformationName, targetTopic]);
-    // return res.rows;
+  const batchSize = 100;
+  const concurrency = 5;
 
-  const transformation = require(`./transformations/${transformationName}`)
+  let messages = [];
+  let processingTasks = [];
 
   await consumer.run({
-    eachMessage: async ({ topic, partition, message }) => {
-      const key = message.key.toString();
-      const value = message.value.toString();
+    eachBatchAutoResolve: false,
+    eachBatch: async ({ batch, resolveOffset, heartbeat, commitOffsetsIfNecessary }) => {
+      console.log(`Received batch with ${batch.messages.length} messages`);
+      for (let message of batch.messages) {
+        messages.push({
+          key: message.key ? message.key.toString() : null,
+          value: message.value.toString(),
+        });
 
-      console.log(`Consumed message: ${key} - ${value}`);
+        if (messages.length >= batchSize) {
+          const task = processBatch(messages, transformation, targetTopic);
+          processingTasks.push(task);
 
-      const transformedValue = transformation(message.value);
+          if (processingTasks.length >= concurrency) {
+            await Promise.all(processingTasks);
+            processingTasks = [];
+          }
 
-      await producer.send({
-        topic: targetTopic,
-        messages: [
-          { key, value: transformedValue }
-        ],
-      });
+          messages = [];
+        }
 
-      console.log(`Produced transformed message: ${key} - ${transformedValue}`);
+        resolveOffset(message.offset);
+        await heartbeat();
+      }
+
+      if (messages.length > 0) {
+        const task = processBatch(messages, transformation, targetTopic);
+        await task;
+        messages = [];
+      }
+
+      await commitOffsetsIfNecessary();
     },
   });
+
+  console.log('Consumer is running');
 };
-
-
-// whenever http request comes in, process the request and call run with arguments 
-// run().catch(console.error);
 
 module.exports = run;
