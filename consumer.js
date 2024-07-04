@@ -33,6 +33,12 @@ const processBatch = async (messages, transformation, targetTopic) => {
 };
 
 const run = async (sourceTopic, targetTopic, transformationName) => {
+  console.log('Running consumer with:', { sourceTopic, targetTopic, transformationName });
+
+  if (!sourceTopic) {
+    throw new Error('Missing required argument "sourceTopic"');
+  }
+
   await consumer.connect();
   await producer.connect();
   await consumer.subscribe({ topic: sourceTopic, fromBeginning: true });
