@@ -1,5 +1,5 @@
 const db = require('./db');
-const consumer = require('./consumer');
+const consumeMessages = require('./consumer');
 
 async function main() {
   const client = await db.getClient();
@@ -25,7 +25,6 @@ async function runExistingConnections() {
   }
 }
 
-
 async function handleConnection(payload) {
   const { source_id, target_id, transformation_id } = payload;
 
@@ -47,7 +46,7 @@ async function handleConnection(payload) {
   const transformation = transformationResult.rows[0].transformation_name;
 
   console.log('Handling connection for:', { sourceTopic, targetTopic, transformation });
-  await consumer(sourceTopic, targetTopic, transformation);
+  await consumeMessages(sourceTopic, targetTopic, transformation);
   console.log('Connection started for', { sourceTopic, targetTopic, transformation });
 }
 
