@@ -12,6 +12,7 @@
   "dependencies": {
     "@kafkajs/confluent-schema-registry": "^3.3.0",
     "avsc": "^5.7.7",
+    "axios": "^1.7.2",
     "body-parser": "^1.20.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
