@@ -50,4 +50,17 @@ async function handleConnection(payload) {
   console.log('Connection started for', { sourceTopic, targetTopic, transformation });
 }
 
+const shutdown = async () => {
+  console.log('Listener shutdown initiated');
+  try {
+    process.exit(0);
+  } catch (error) {
+    console.error('Error during shutdown', error);
+    process.exit(1);
+  }
+};
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
 main().catch(err => console.error('Error in main function', err));
