@@ -114,4 +114,20 @@ const run = async (sourceTopic, targetTopic, transformationName) => {
   console.log('Consumer is running');
 };
 
+const shutdown = async () => {
+  console.log('Processor shutdown initiated');
+  try {
+    await consumer.disconnect();
+    await producer.disconnect();
+    console.log('Successfully disconnected Kafka consumer and producer');
+    process.exit(0);
+  } catch (error) {
+    console.error('Error during shutdown', error);
+    process.exit(1);
+  }
+};
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
 module.exports = run;
