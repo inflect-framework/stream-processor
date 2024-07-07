@@ -44,6 +44,8 @@ const applyTransformations = async (message, steps) => {
     const processorName = await getProcessorName(step);
     const transformation = require(`./transformations/${processorName}`);
     transformedMessage = transformation(transformedMessage);
+    console.log('ran process ' + processorName)
+    console.log(transformedMessage)
   }
   return transformedMessage;
 };
