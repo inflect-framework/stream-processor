@@ -7,47 +7,53 @@ async function main() {
   client.on('notification', async (data) => {
     const payload = JSON.parse(data.payload);
     console.log('Received payload:', payload);
-    await handleConnection(payload);
+    await handlePipeline(payload);
   });
 
-  await client.query('LISTEN connection_event');
-  console.log('Listening for connection events');
+  await client.query('LISTEN pipeline_event');
+  console.log('Listening for pipeline events');
 
-  await runExistingConnections();
+  await runExistingPipelines();
 }
 
-async function runExistingConnections() {
-  const connectionsQuery = 'SELECT source_id, target_id, transformation_id FROM connections';
-  const connectionsResult = await db.query(connectionsQuery);
+async function runExistingPipelines() {
+  const pipelinesQuery = 'SELECT * FROM pipelines WHERE is_active = true';
+  const pipelinesResult = await db.query(pipelinesQuery);
 
-  for (const row of connectionsResult.rows) {
-    await handleConnection(row);
+  for (const row of pipelinesResult.rows) {
+    await handlePipeline(row);
   }
 }
 
-async function handleConnection(payload) {
-  const { source_id, target_id, transformation_id } = payload;
+async function handlePipeline(payload) {
+  const { name, source_topic_id, target_topic_id, incoming_schema_id, outgoing_schema_id, steps, is_active } = payload;
 
-  const sourceQuery = 'SELECT source_topic FROM sources WHERE id = $1';
-  const targetQuery = 'SELECT target_topic FROM targets WHERE id = $1';
-  const transformationQuery = 'SELECT transformation_name FROM transformations WHERE id = $1';
+  const topicQuery = 'SELECT topic_name FROM topics WHERE id = $1';
+  const schemaQuery = 'SELECT schema_name FROM schemas WHERE id = $1';
 
-  const sourceResult = await db.query(sourceQuery, [source_id]);
-  const targetResult = await db.query(targetQuery, [target_id]);
-  const transformationResult = await db.query(transformationQuery, [transformation_id]);
+  const sourceTopicResult = await db.query(topicQuery, [source_topic_id]);
+  const targetTopicResult = await db.query(topicQuery, [target_topic_id]);
+  const incomingSchemaResult = await db.query(schemaQuery, [incoming_schema_id]);
+  const outgoingSchemaResult = await db.query(schemaQuery, [outgoing_schema_id]);
 
-  if (sourceResult.rowCount === 0 || targetResult.rowCount === 0 || transformationResult.rowCount === 0) {
-    console.error('Error: One or more required values are missing from the sources, targets, or transformations tables.');
+  if (
+    sourceTopicResult.rowCount === 0 ||
+    targetTopicResult.rowCount === 0 ||
+    incomingSchemaResult.rowCount === 0 ||
+    outgoingSchemaResult.rowCount === 0
+  ) {
+    console.error('Error: One or more required values are missing from the topics or schemas tables.');
     return;
   }
 
-  const sourceTopic = sourceResult.rows[0].source_topic;
-  const targetTopic = targetResult.rows[0].target_topic;
-  const transformation = transformationResult.rows[0].transformation_name;
+  const sourceTopic = sourceTopicResult.rows[0].topic_name;
+  const targetTopic = targetTopicResult.rows[0].topic_name;
+  const incomingSchema = incomingSchemaResult.rows[0].schema_name;
+  const outgoingSchema = outgoingSchemaResult.rows[0].schema_name;
 
-  console.log('Handling connection for:', { sourceTopic, targetTopic, transformation });
-  await consumeMessages(sourceTopic, targetTopic, transformation);
-  console.log('Connection started for', { sourceTopic, targetTopic, transformation });
+  console.log('Handling pipeline for:', { name, sourceTopic, targetTopic, incomingSchema, outgoingSchema, steps });
+  await consumeMessages(sourceTopic, targetTopic, steps.processors, incomingSchema, outgoingSchema);
+  console.log('Pipeline started for', { name, sourceTopic, targetTopic, incomingSchema, outgoingSchema, steps });
 }
 
 const shutdown = async () => {

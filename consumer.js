@@ -1,6 +1,7 @@
 const { Kafka } = require('kafkajs');
 const dotenv = require('dotenv').config();
 const { SchemaRegistry, readAVSCAsync } = require('@kafkajs/confluent-schema-registry');
+const db = require('./db');
 
 const APIKEY = process.env.APIKEY;
 const APISECRET = process.env.APISECRET;
@@ -20,23 +21,40 @@ const kafka = new Kafka({
   }
 });
 
-const consumer = kafka.consumer({ groupId: 'my-group' });
 const producer = kafka.producer();
-const registry = new SchemaRegistry({ 
+const registry = new SchemaRegistry({
   host: REGISTRY_URL,
-  auth: { 
-    username: REGISTRY_APIKEY, 
-    password: REGISTRY_APISECRET 
-  } 
+  auth: {
+    username: REGISTRY_APIKEY,
+    password: REGISTRY_APISECRET
+  }
 });
 
-const processBatch = async (messages, transformation, targetTopic, schemaId) => {
+const getProcessorName = async (processorId) => {
+  const result = await db.query('SELECT processor_name FROM processors WHERE id = $1', [processorId]);
+  if (result.rowCount === 0) {
+    throw new Error(`Processor with id ${processorId} not found`);
+  }
+  return result.rows[0].processor_name;
+};
+
+const applyTransformations = async (message, steps) => {
+  let transformedMessage = { ...message };
+  for (const step of steps) {
+    const processorName = await getProcessorName(step);
+    const transformation = require(`./transformations/${processorName}`);
+    transformedMessage = transformation(transformedMessage);
+  }
+  return transformedMessage;
+};
+
+const processBatch = async (messages, steps, targetTopic, schemaId) => {
   const transformedMessages = await Promise.all(
     messages.map(async ({ key, value }) => {
       try {
         const decodedMessage = await registry.decode(value);
-        const transformedValue = transformation(decodedMessage.value);
-        const encodedValue = await registry.encode(schemaId, { key: decodedMessage.key, value: transformedValue });
+        const transformedValue = await applyTransformations(decodedMessage, steps);
+        const encodedValue = await registry.encode(schemaId, transformedValue);
         return { key: decodedMessage.key, value: encodedValue };
       } catch (error) {
         console.error(`Failed to process message with key ${key}:`, error);
@@ -57,17 +75,22 @@ const processBatch = async (messages, transformation, targetTopic, schemaId) => 
   }
 };
 
-const run = async (sourceTopic, targetTopic, transformationName) => {
-  console.log('Running consumer with:', { sourceTopic, targetTopic, transformationName });
+const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSchema) => {
+  console.log('Running consumer with:', { sourceTopic, targetTopic, steps, incomingSchema, outgoingSchema });
 
+  const consumer = kafka.consumer({ groupId: `${sourceTopic}-group` });
   await consumer.connect();
   await producer.connect();
   await consumer.subscribe({ topic: sourceTopic, fromBeginning: true });
 
-  const transformation = require(`./transformations/${transformationName}`);
-
-  const schema = await readAVSCAsync('./schemas/sourceTopicSchema.avsc');
-  const { id: schemaId } = await registry.register(schema);
+  let incomingSchemaId, outgoingSchemaId;
+  try {
+    incomingSchemaId = await registry.getLatestSchemaId(incomingSchema);
+    outgoingSchemaId = await registry.getLatestSchemaId(outgoingSchema);
+  } catch (error) {
+    console.error('Failed to fetch schema IDs:', error);
+    return;
+  }
 
   const batchSize = 100;
   const concurrency = 5;
@@ -86,7 +109,7 @@ const run = async (sourceTopic, targetTopic, transformationName) => {
         });
 
         if (messages.length >= batchSize) {
-          const task = processBatch(messages, transformation, targetTopic, schemaId);
+          const task = processBatch(messages, steps, targetTopic, outgoingSchemaId);
           processingTasks.push(task);
 
           if (processingTasks.length >= concurrency) {
@@ -102,7 +125,7 @@ const run = async (sourceTopic, targetTopic, transformationName) => {
       }
 
       if (messages.length > 0) {
-        const task = processBatch(messages, transformation, targetTopic, schemaId);
+        const task = processBatch(messages, steps, targetTopic, outgoingSchemaId);
         await task;
         messages = [];
       }
@@ -117,9 +140,8 @@ const run = async (sourceTopic, targetTopic, transformationName) => {
 const shutdown = async () => {
   console.log('Processor shutdown initiated');
   try {
-    await consumer.disconnect();
     await producer.disconnect();
-    console.log('Successfully disconnected Kafka consumer and producer');
+    console.log('Successfully disconnected Kafka producer');
     process.exit(0);
   } catch (error) {
     console.error('Error during shutdown', error);

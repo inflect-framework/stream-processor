@@ -19,7 +19,7 @@ const registryAuth = {
   password: process.env.REGISTRY_APISECRET,
 };
 
-async function getAndPrintTopicsAndSchemas() {
+async function getTopicsAndSchemas() {
   try {
     const admin = kafka.admin();
     await admin.connect();
@@ -45,4 +45,4 @@ async function getAndPrintTopicsAndSchemas() {
   }
 }
 
-getAndPrintTopicsAndSchemas();
+getTopicsAndSchemas();
