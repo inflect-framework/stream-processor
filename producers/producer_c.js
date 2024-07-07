@@ -1,6 +1,6 @@
 const { Kafka } = require('kafkajs');
 const dotenv = require('dotenv').config();
-const { SchemaRegistry, readAVSCAsync } = require('@kafkajs/confluent-schema-registry');
+const { SchemaRegistry, SchemaType } = require('@kafkajs/confluent-schema-registry');
 
 const APIKEY = process.env.APIKEY;
 const APISECRET = process.env.APISECRET;
@@ -10,7 +10,7 @@ const REGISTRY_APIKEY = process.env.REGISTRY_APIKEY;
 const REGISTRY_APISECRET = process.env.REGISTRY_APISECRET;
 
 const kafka = new Kafka({
-  clientId: 'my-producer',
+  clientId: 'protobuf-producer',
   brokers: [BROKER],
   ssl: true,
   sasl: {
@@ -20,42 +20,53 @@ const kafka = new Kafka({
   }
 });
 
-const producer = kafka.producer({
-  allowAutoTopicCreation: true,
-  idempotent: true,
-  transactionalId: 'my-transactional-id',
+const producer = kafka.producer();
+
+const registry = new SchemaRegistry({
+  host: REGISTRY_URL,
+  auth: {
+    username: REGISTRY_APIKEY,
+    password: REGISTRY_APISECRET
+  }
 });
 
-const registry = new SchemaRegistry({ 
-  host: REGISTRY_URL,
-  auth: { 
-    username: REGISTRY_APIKEY, 
-    password: REGISTRY_APISECRET 
-  } 
-});
+const protobufSchema = `
+syntax = "proto3";
+package inflect.streamprocessor;
+
+message SchemaC1 {
+  string key = 1;
+  string value = 2;
+  int32 num = 3;
+}
+`;
 
 const run = async () => {
   await producer.connect();
 
-  const schema = await readAVSCAsync('./schemas/sourceTopicSchema.avsc');
-  const { id: schemaId } = await registry.register(schema);
+  let schemaId;
+  try {
+    const { id } = await registry.register({ type: SchemaType.PROTOBUF, schema: protobufSchema }, { subject: 'schema_c' });
+    schemaId = id;
+  } catch (error) {
+    console.error('Failed to register and fetch schema ID:', error);
+    return;
+  }
 
   const produceMessages = async (batchNumber) => {
     const messages = [];
-    for (let i = 0; i < 1000; i++) {
+    for (let i = 0; i < 10; i++) {
       const key = `key-${batchNumber}-${i}`;
       const value = `value-${batchNumber}-${i}`;
-      const encodedValue = await registry.encode(schemaId, { key, value });
-      
-      if (encodedValue[0] !== 0) {
-        throw new Error(`Invalid magic byte in encoded message: ${encodedValue[0]}`);
-      }
-      
+      const num = batchNumber * 100 + i;
+      const message = { key, value, num };
+      const encodedValue = await registry.encode(schemaId, message);
+
       messages.push({ key: Buffer.from(key), value: encodedValue });
     }
 
     await producer.send({
-      topic: 'source_topic',
+      topic: 'source_c',
       messages: messages,
     });
 
@@ -64,11 +75,8 @@ const run = async () => {
 
   let batchNumber = 0;
   while (true) {
-    const promises = [];
-    for (let i = 0; i < 5; i++) {
-      promises.push(produceMessages(batchNumber++));
-    }
-    await Promise.all(promises);
+    await produceMessages(batchNumber++);
+    await new Promise(resolve => setTimeout(resolve, 1000));
   }
 };
 
