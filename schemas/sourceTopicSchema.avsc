@@ -1,9 +1,0 @@
-{
-  "type": "record",
-  "namespace": "inflect.streamprocessor",
-  "name": "Message",
-  "fields": [
-    { "name": "key", "type": "string" },
-    { "name": "value", "type": "string" }
-  ]
-}

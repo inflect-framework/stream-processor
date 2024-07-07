@@ -1,8 +1,7 @@
-const capitalize = (value) => {
-  if (typeof value !== 'string') {
-    value = String(value);
-  }
-  return value.toUpperCase();
-}
-
-module.exports = capitalize;
+module.exports = (message) => {
+  return {
+    key: message.key,
+    value: message.value.toUpperCase(),
+    num: message.num
+  };
+};
