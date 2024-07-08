@@ -20,7 +20,7 @@ async function insertTestData() {
         target_topic: 'target_a',
         incoming_schema: 'schema_a',
         outgoing_schema: 'schema_a',
-        steps: { processors: ['1'] },
+        steps: { processors: ['1'], dlq: [17] },
         is_active: true,
       },
       {
@@ -29,7 +29,7 @@ async function insertTestData() {
         target_topic: 'target_b',
         incoming_schema: 'schema_b',
         outgoing_schema: 'schema_b',
-        steps: { processors: ['1'] },
+        steps: { processors: ['1'], dlq: [null, 17] },
         is_active: true,
       },
       {
@@ -38,7 +38,7 @@ async function insertTestData() {
         target_topic: 'target_c',
         incoming_schema: 'schema_c',
         outgoing_schema: 'schema_c',
-        steps: { processors: ['1'] },
+        steps: { processors: ['1'], dlq: [17] },
         is_active: true,
       },
     ];

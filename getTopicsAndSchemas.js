@@ -1,6 +1,7 @@
 const { Kafka } = require('kafkajs');
 const axios = require('axios');
 require('dotenv').config();
+const { Client } = require('pg');
 
 const kafka = new Kafka({
   clientId: 'inflect-client',
@@ -19,30 +20,62 @@ const registryAuth = {
   password: process.env.REGISTRY_APISECRET,
 };
 
-async function getTopicsAndSchemas() {
+const pgClient = new Client({
+  user: process.env.PGUSER,
+  host: process.env.PGHOST,
+  database: 'inflect',
+  password: process.env.PGPASSWORD,
+  port: process.env.PGPORT,
+});
+
+const insertTopic = async (topicName) => {
+  const query = `
+    INSERT INTO topics (topic_name)
+    VALUES ($1)
+    ON CONFLICT (topic_name) DO NOTHING;
+  `;
+  await pgClient.query(query, [topicName]);
+};
+
+const insertSchema = async (schemaName) => {
+  const query = `
+    INSERT INTO schemas (schema_name)
+    VALUES ($1)
+    ON CONFLICT (schema_name) DO NOTHING;
+  `;
+  await pgClient.query(query, [schemaName]);
+};
+
+async function getAndInsertTopicsAndSchemas() {
   try {
+    await pgClient.connect();
+
     const admin = kafka.admin();
     await admin.connect();
     const topics = await admin.listTopics();
-    console.log('Kafka Topics:', topics);
     await admin.disconnect();
+
+    for (const topic of topics) {
+      await insertTopic(topic);
+    }
+    console.log('Kafka Topics:', topics);
 
     const subjectsResponse = await axios.get(`${registryUrl}/subjects`, {
       auth: registryAuth
     });
     const subjects = subjectsResponse.data;
+
+    for (const subject of subjects) {
+      await insertSchema(subject);
+    }
     console.log('Schema Registry Subjects:', subjects);
 
-    const schemas = await Promise.all(subjects.map(async (subject) => {
-      const schemaResponse = await axios.get(`${registryUrl}/subjects/${subject}/versions/latest`, {
-        auth: registryAuth
-      });
-      return { subject, schema: schemaResponse.data.schema };
-    }));
-    console.log('Schemas:', schemas);
+    console.log('Topics and schemas inserted successfully');
   } catch (error) {
     console.error('Error listing topics and schemas:', error);
+  } finally {
+    await pgClient.end();
   }
 }
 
-getTopicsAndSchemas();
+getAndInsertTopicsAndSchemas();

@@ -1,6 +1,6 @@
 const { Kafka } = require('kafkajs');
 const dotenv = require('dotenv').config();
-const { SchemaRegistry, readAVSCAsync } = require('@kafkajs/confluent-schema-registry');
+const { SchemaRegistry } = require('@kafkajs/confluent-schema-registry');
 const db = require('./db');
 
 const APIKEY = process.env.APIKEY;
@@ -38,24 +38,53 @@ const getProcessorName = async (processorId) => {
   return result.rows[0].processor_name;
 };
 
-const applyTransformations = async (message, steps) => {
-  let transformedMessage = { ...message };
-  for (const step of steps) {
-    const processorName = await getProcessorName(step);
-    const transformation = require(`./transformations/${processorName}`);
-    transformedMessage = transformation(transformedMessage);
+const getDlqTopicName = async (topicId) => {
+  const result = await db.query('SELECT topic_name FROM topics WHERE id = $1', [topicId]);
+  if (result.rowCount === 0) {
+    throw new Error(`DLQ topic with id ${topicId} not found`);
   }
-  return transformedMessage;
+  return result.rows[0].topic_name;
 };
 
-const processBatch = async (messages, steps, targetTopic, schemaId) => {
+const applyTransformations = async (message, steps, dlqSteps) => {
+  let transformedMessage = { ...message };
+  for (let i = 0; i < steps.length; i++) {
+    const processorName = await getProcessorName(steps[i]);
+    const transformation = require(`./transformations/${processorName}`);
+    transformedMessage = transformation(transformedMessage);
+    console.log('ran process ' + processorName);
+    console.log(transformedMessage);
+
+    if (!transformedMessage) {
+      if (dlqSteps && dlqSteps[i]) {
+        const dlqTopicName = await getDlqTopicName(dlqSteps[i]);
+        return { dlqMessage: message, dlqTopicName };
+      } else {
+        return { transformedMessage: null };  // End processing without DLQ
+      }
+    }
+  }
+  return { transformedMessage };
+};
+
+const processBatch = async (messages, steps, dlqSteps, targetTopic, schemaId) => {
   const transformedMessages = await Promise.all(
     messages.map(async ({ key, value }) => {
       try {
         const decodedMessage = await registry.decode(value);
-        const transformedValue = await applyTransformations(decodedMessage, steps);
-        const encodedValue = await registry.encode(schemaId, transformedValue);
-        return { key: decodedMessage.key, value: encodedValue };
+        const { transformedMessage, dlqMessage, dlqTopicName } = await applyTransformations(decodedMessage, steps, dlqSteps);
+
+        if (dlqMessage) {
+          const encodedDlqValue = await registry.encode(schemaId, dlqMessage);
+          return { key: decodedMessage.key, value: encodedDlqValue, dlqTopicName };
+        }
+
+        if (!transformedMessage) {
+          return null;  // End processing without DLQ
+        }
+
+        const encodedValue = await registry.encode(schemaId, transformedMessage);
+        return { key: decodedMessage.key, value: encodedValue, dlqTopicName: null };
       } catch (error) {
         console.error(`Failed to process message with key ${key}:`, error);
         return null;
@@ -63,15 +92,25 @@ const processBatch = async (messages, steps, targetTopic, schemaId) => {
     })
   );
 
-  const validMessages = transformedMessages.filter(msg => msg !== null);
+  const validMessages = transformedMessages.filter(msg => msg !== null && !msg.dlqTopicName);
+  const dlqMessages = transformedMessages.filter(msg => msg !== null && msg.dlqTopicName);
 
   if (validMessages.length > 0) {
     await producer.send({
       topic: targetTopic,
-      messages: validMessages,
+      messages: validMessages.map(({ key, value }) => ({ key, value })),
     });
 
     console.log(`Produced ${validMessages.length} transformed messages`);
+  }
+
+  for (const dlqMessage of dlqMessages) {
+    await producer.send({
+      topic: dlqMessage.dlqTopicName,
+      messages: [{ key: dlqMessage.key, value: dlqMessage.value }],
+    });
+
+    console.log(`Produced DLQ message to ${dlqMessage.dlqTopicName}`);
   }
 };
 
@@ -109,7 +148,7 @@ const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSche
         });
 
         if (messages.length >= batchSize) {
-          const task = processBatch(messages, steps, targetTopic, outgoingSchemaId);
+          const task = processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
           processingTasks.push(task);
 
           if (processingTasks.length >= concurrency) {
@@ -125,7 +164,7 @@ const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSche
       }
 
       if (messages.length > 0) {
-        const task = processBatch(messages, steps, targetTopic, outgoingSchemaId);
+        const task = processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
         await task;
         messages = [];
       }
