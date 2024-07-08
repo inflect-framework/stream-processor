@@ -55,9 +55,13 @@ const applyTransformations = async (message, steps, dlqSteps) => {
     console.log('ran process ' + processorName);
     console.log(transformedMessage);
 
-    if (!transformedMessage && dlqSteps[i]) {
-      const dlqTopicName = await getDlqTopicName(dlqSteps[i]);
-      return { dlqMessage: message, dlqTopicName };
+    if (!transformedMessage) {
+      if (dlqSteps && dlqSteps[i]) {
+        const dlqTopicName = await getDlqTopicName(dlqSteps[i]);
+        return { dlqMessage: message, dlqTopicName };
+      } else {
+        return { transformedMessage: null };  // End processing without DLQ
+      }
     }
   }
   return { transformedMessage };
@@ -73,6 +77,10 @@ const processBatch = async (messages, steps, dlqSteps, targetTopic, schemaId) =>
         if (dlqMessage) {
           const encodedDlqValue = await registry.encode(schemaId, dlqMessage);
           return { key: decodedMessage.key, value: encodedDlqValue, dlqTopicName };
+        }
+
+        if (!transformedMessage) {
+          return null;  // End processing without DLQ
         }
 
         const encodedValue = await registry.encode(schemaId, transformedMessage);

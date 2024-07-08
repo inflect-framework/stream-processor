@@ -52,7 +52,7 @@ async function handlePipeline(payload) {
   const outgoingSchema = outgoingSchemaResult.rows[0].schema_name;
 
   console.log('Handling pipeline for:', { name, sourceTopic, targetTopic, incomingSchema, outgoingSchema, steps });
-  await consumeMessages(sourceTopic, targetTopic, steps.processors, incomingSchema, outgoingSchema);
+  await consumeMessages(sourceTopic, targetTopic, steps, incomingSchema, outgoingSchema);
   console.log('Pipeline started for', { name, sourceTopic, targetTopic, incomingSchema, outgoingSchema, steps });
 }
 
