@@ -52,8 +52,6 @@ const applyTransformations = async (message, steps, dlqSteps) => {
     const processorName = await getProcessorName(steps[i]);
     const transformation = require(`./transformations/${processorName}`);
     transformedMessage = transformation(transformedMessage);
-    // console.log('ran process ' + processorName);
-    // console.log(transformedMessage);
 
     if (!transformedMessage) {
       if (dlqSteps && dlqSteps[i]) {
@@ -114,47 +112,20 @@ const processBatch = async (messages, steps, dlqSteps, targetTopic, schemaId) =>
   }
 };
 
-const measureThroughput = (() => {
-  let messageCount = 0;
-  let lastMeasurement = Date.now();
-  const interval = 60000;
-
-  return () => {
-    messageCount++;
-    const now = Date.now();
-    if (now - lastMeasurement >= interval) {
-      const throughput = messageCount / ((now - lastMeasurement) / 1000);
-      console.log(`Current throughput: ${throughput.toFixed(2)} messages/second`);
-      messageCount = 0;
-      lastMeasurement = now;
-      return throughput;
-    }
-    return null;
-  };
-})();
-
-const adjustConcurrency = (() => {
-  let concurrency = 10;
-  const maxConcurrency = 50;
-  const minConcurrency = 1;
-  let lastThroughput = 0;
-
-  return (currentThroughput) => {
-    if (currentThroughput > lastThroughput) {
-      concurrency = Math.min(maxConcurrency, concurrency + 1);
-    } else if (currentThroughput < lastThroughput) {
-      concurrency = Math.max(minConcurrency, concurrency - 1);
-    }
-    lastThroughput = currentThroughput;
-    console.log(`Adjusted concurrency to: ${concurrency}`);
-    return concurrency;
-  };
-})();
-
 const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSchema) => {
-  console.log('Running consumer with:', { sourceTopic, targetTopic, steps, incomingSchema, outgoingSchema });
+  const pipelineId = process.env.PIPELINE_ID;
+  if (!pipelineId) {
+    throw new Error('PIPELINE_ID environment variable is not set');
+  }
 
-  const consumer = kafka.consumer({ groupId: `${sourceTopic}-group` });
+  console.log(`Running consumer for pipeline ${pipelineId} with:`, { sourceTopic, targetTopic, steps, incomingSchema, outgoingSchema });
+
+  const consumer = kafka.consumer({ 
+    groupId: `pipeline-${pipelineId}-${sourceTopic}-group`,
+    sessionTimeout: 30000,
+    heartbeatInterval: 3000,
+  });
+  
   await consumer.connect();
   await producer.connect();
   await consumer.subscribe({ topic: sourceTopic, fromBeginning: true });
@@ -169,15 +140,13 @@ const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSche
   }
 
   const batchSize = 500;
-  let concurrency = 10;
-
-  let messages = [];
-  let processingTasks = [];
 
   await consumer.run({
     eachBatchAutoResolve: false,
     eachBatch: async ({ batch, resolveOffset, heartbeat, commitOffsetsIfNecessary }) => {
       console.log(`Received batch with ${batch.messages.length} messages`);
+      let messages = [];
+
       for (let message of batch.messages) {
         messages.push({
           key: message.key ? message.key.toString() : null,
@@ -185,19 +154,7 @@ const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSche
         });
 
         if (messages.length >= batchSize) {
-          const task = processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
-          processingTasks.push(task);
-
-          if (processingTasks.length >= concurrency) {
-            await Promise.all(processingTasks);
-            processingTasks = [];
-
-            const throughput = measureThroughput();
-            if (throughput !== null) {
-              concurrency = adjustConcurrency(throughput);
-            }
-          }
-
+          await processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
           messages = [];
         }
 
@@ -206,9 +163,7 @@ const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSche
       }
 
       if (messages.length > 0) {
-        const task = processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
-        await task;
-        messages = [];
+        await processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
       }
 
       await commitOffsetsIfNecessary();
@@ -223,6 +178,8 @@ const shutdown = async () => {
   try {
     await producer.disconnect();
     console.log('Successfully disconnected Kafka producer');
+    await db.pool.end();
+    console.log('Successfully closed database pool');
     process.exit(0);
   } catch (error) {
     console.error('Error during shutdown', error);

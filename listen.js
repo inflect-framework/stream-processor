@@ -2,27 +2,26 @@ const db = require('./db');
 const consumeMessages = require('./consumer');
 
 async function main() {
-  const client = await db.getClient();
+  const pipelineId = process.env.PIPELINE_ID;
+  
+  if (!pipelineId) {
+    console.error('PIPELINE_ID environment variable is not set. Exiting.');
+    process.exit(1);
+  }
 
-  client.on('notification', async (data) => {
-    const payload = JSON.parse(data.payload);
-    console.log('Received payload:', payload);
-    await handlePipeline(payload);
-  });
-
-  await client.query('LISTEN pipeline_event');
-  console.log('Listening for pipeline events');
-
-  await runExistingPipelines();
+  await handleSpecificPipeline(pipelineId);
 }
 
-async function runExistingPipelines() {
-  const pipelinesQuery = 'SELECT * FROM pipelines WHERE is_active = true';
-  const pipelinesResult = await db.query(pipelinesQuery);
+async function handleSpecificPipeline(pipelineId) {
+  const pipelineQuery = 'SELECT * FROM pipelines WHERE id = $1 AND is_active = true';
+  const pipelineResult = await db.query(pipelineQuery, [pipelineId]);
 
-  for (const row of pipelinesResult.rows) {
-    await handlePipeline(row);
+  if (pipelineResult.rowCount === 0) {
+    console.error(`No active pipeline found with id ${pipelineId}`);
+    process.exit(1);
   }
+
+  await handlePipeline(pipelineResult.rows[0]);
 }
 
 async function handlePipeline(payload) {
@@ -43,7 +42,7 @@ async function handlePipeline(payload) {
     outgoingSchemaResult.rowCount === 0
   ) {
     console.error('Error: One or more required values are missing from the topics or schemas tables.');
-    return;
+    process.exit(1);
   }
 
   const sourceTopic = sourceTopicResult.rows[0].topic_name;
@@ -59,6 +58,7 @@ async function handlePipeline(payload) {
 const shutdown = async () => {
   console.log('Listener shutdown initiated');
   try {
+    await db.end();  // Close database connection
     process.exit(0);
   } catch (error) {
     console.error('Error during shutdown', error);
@@ -69,4 +69,7 @@ const shutdown = async () => {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-main().catch(err => console.error('Error in main function', err));
+main().catch(err => {
+  console.error('Error in main function', err);
+  process.exit(1);
+});
