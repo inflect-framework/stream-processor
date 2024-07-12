@@ -30,6 +30,23 @@ const getRandomTransformations = async (allTransformations, min, max) => {
   return processorIds;
 };
 
+const getRandomDlqTopics = async (count) => {
+  const result = await pgClient.query('SELECT id FROM topics WHERE topic_name LIKE \'dlq_%\'');
+  const dlqTopics = result.rows.map(row => row.id);
+
+  if (dlqTopics.length === 0) {
+    throw new Error('No DLQ topics found');
+  }
+
+  const selectedDlqTopics = [];
+  for (let i = 0; i < count; i++) {
+    const randomDlqTopic = dlqTopics[Math.floor(Math.random() * dlqTopics.length)];
+    selectedDlqTopics.push(randomDlqTopic);
+  }
+
+  return selectedDlqTopics;
+};
+
 async function updatePipelines() {
   try {
     await pgClient.connect();
@@ -43,7 +60,8 @@ async function updatePipelines() {
     const pipelines = pipelinesResult.rows;
 
     for (const pipeline of pipelines) {
-      const randomTransformations = await getRandomTransformations(transformationNames, 2, 4);
+      const randomTransformations = await getRandomTransformations(transformationNames, 1, 3);
+      const randomDlqTopics = await getRandomDlqTopics(randomTransformations.length);
 
       const updateQuery = `
         UPDATE pipelines
@@ -52,7 +70,7 @@ async function updatePipelines() {
       `;
 
       const values = [
-        { processors: randomTransformations },
+        { processors: randomTransformations, dlq: randomDlqTopics },
         pipeline.id,
       ];
 

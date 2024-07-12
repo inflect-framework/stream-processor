@@ -52,15 +52,13 @@ const applyTransformations = async (message, steps, dlqSteps) => {
     const processorName = await getProcessorName(steps[i]);
     const transformation = require(`./transformations/${processorName}`);
     transformedMessage = transformation(transformedMessage);
-    console.log('ran process ' + processorName);
-    console.log(transformedMessage);
 
     if (!transformedMessage) {
       if (dlqSteps && dlqSteps[i]) {
         const dlqTopicName = await getDlqTopicName(dlqSteps[i]);
         return { dlqMessage: message, dlqTopicName };
       } else {
-        return { transformedMessage: null };  // End processing without DLQ
+        return { transformedMessage: null };
       }
     }
   }
@@ -80,7 +78,7 @@ const processBatch = async (messages, steps, dlqSteps, targetTopic, schemaId) =>
         }
 
         if (!transformedMessage) {
-          return null;  // End processing without DLQ
+          return null;
         }
 
         const encodedValue = await registry.encode(schemaId, transformedMessage);
@@ -115,9 +113,19 @@ const processBatch = async (messages, steps, dlqSteps, targetTopic, schemaId) =>
 };
 
 const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSchema) => {
-  console.log('Running consumer with:', { sourceTopic, targetTopic, steps, incomingSchema, outgoingSchema });
+  const pipelineId = process.env.PIPELINE_ID;
+  if (!pipelineId) {
+    throw new Error('PIPELINE_ID environment variable is not set');
+  }
 
-  const consumer = kafka.consumer({ groupId: `${sourceTopic}-group` });
+  console.log(`Running consumer for pipeline ${pipelineId} with:`, { sourceTopic, targetTopic, steps, incomingSchema, outgoingSchema });
+
+  const consumer = kafka.consumer({ 
+    groupId: `pipeline-${pipelineId}-${sourceTopic}-group`,
+    sessionTimeout: 30000,
+    heartbeatInterval: 3000,
+  });
+  
   await consumer.connect();
   await producer.connect();
   await consumer.subscribe({ topic: sourceTopic, fromBeginning: true });
@@ -131,16 +139,14 @@ const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSche
     return;
   }
 
-  const batchSize = 100;
-  const concurrency = 5;
-
-  let messages = [];
-  let processingTasks = [];
+  const batchSize = 500;
 
   await consumer.run({
     eachBatchAutoResolve: false,
     eachBatch: async ({ batch, resolveOffset, heartbeat, commitOffsetsIfNecessary }) => {
       console.log(`Received batch with ${batch.messages.length} messages`);
+      let messages = [];
+
       for (let message of batch.messages) {
         messages.push({
           key: message.key ? message.key.toString() : null,
@@ -148,14 +154,7 @@ const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSche
         });
 
         if (messages.length >= batchSize) {
-          const task = processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
-          processingTasks.push(task);
-
-          if (processingTasks.length >= concurrency) {
-            await Promise.all(processingTasks);
-            processingTasks = [];
-          }
-
+          await processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
           messages = [];
         }
 
@@ -164,9 +163,7 @@ const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSche
       }
 
       if (messages.length > 0) {
-        const task = processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
-        await task;
-        messages = [];
+        await processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
       }
 
       await commitOffsetsIfNecessary();
@@ -181,6 +178,8 @@ const shutdown = async () => {
   try {
     await producer.disconnect();
     console.log('Successfully disconnected Kafka producer');
+    await db.pool.end();
+    console.log('Successfully closed database pool');
     process.exit(0);
   } catch (error) {
     console.error('Error during shutdown', error);
