@@ -44,7 +44,7 @@ const run = async () => {
 
   const produceMessages = async (batchNumber) => {
     const messages = [];
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 10000; i++) {
       const key = `key-${batchNumber}-${i}`;
       const value = `value-${batchNumber}-${i}`;
       const num = batchNumber * 100 + i;

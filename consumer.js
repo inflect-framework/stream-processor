@@ -52,15 +52,15 @@ const applyTransformations = async (message, steps, dlqSteps) => {
     const processorName = await getProcessorName(steps[i]);
     const transformation = require(`./transformations/${processorName}`);
     transformedMessage = transformation(transformedMessage);
-    console.log('ran process ' + processorName);
-    console.log(transformedMessage);
+    // console.log('ran process ' + processorName);
+    // console.log(transformedMessage);
 
     if (!transformedMessage) {
       if (dlqSteps && dlqSteps[i]) {
         const dlqTopicName = await getDlqTopicName(dlqSteps[i]);
         return { dlqMessage: message, dlqTopicName };
       } else {
-        return { transformedMessage: null };  // End processing without DLQ
+        return { transformedMessage: null };
       }
     }
   }
@@ -80,7 +80,7 @@ const processBatch = async (messages, steps, dlqSteps, targetTopic, schemaId) =>
         }
 
         if (!transformedMessage) {
-          return null;  // End processing without DLQ
+          return null;
         }
 
         const encodedValue = await registry.encode(schemaId, transformedMessage);
@@ -114,6 +114,43 @@ const processBatch = async (messages, steps, dlqSteps, targetTopic, schemaId) =>
   }
 };
 
+const measureThroughput = (() => {
+  let messageCount = 0;
+  let lastMeasurement = Date.now();
+  const interval = 60000;
+
+  return () => {
+    messageCount++;
+    const now = Date.now();
+    if (now - lastMeasurement >= interval) {
+      const throughput = messageCount / ((now - lastMeasurement) / 1000);
+      console.log(`Current throughput: ${throughput.toFixed(2)} messages/second`);
+      messageCount = 0;
+      lastMeasurement = now;
+      return throughput;
+    }
+    return null;
+  };
+})();
+
+const adjustConcurrency = (() => {
+  let concurrency = 10;
+  const maxConcurrency = 50;
+  const minConcurrency = 1;
+  let lastThroughput = 0;
+
+  return (currentThroughput) => {
+    if (currentThroughput > lastThroughput) {
+      concurrency = Math.min(maxConcurrency, concurrency + 1);
+    } else if (currentThroughput < lastThroughput) {
+      concurrency = Math.max(minConcurrency, concurrency - 1);
+    }
+    lastThroughput = currentThroughput;
+    console.log(`Adjusted concurrency to: ${concurrency}`);
+    return concurrency;
+  };
+})();
+
 const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSchema) => {
   console.log('Running consumer with:', { sourceTopic, targetTopic, steps, incomingSchema, outgoingSchema });
 
@@ -131,8 +168,8 @@ const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSche
     return;
   }
 
-  const batchSize = 100;
-  const concurrency = 5;
+  const batchSize = 500;
+  let concurrency = 10;
 
   let messages = [];
   let processingTasks = [];
@@ -154,6 +191,11 @@ const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSche
           if (processingTasks.length >= concurrency) {
             await Promise.all(processingTasks);
             processingTasks = [];
+
+            const throughput = measureThroughput();
+            if (throughput !== null) {
+              concurrency = adjustConcurrency(throughput);
+            }
           }
 
           messages = [];
