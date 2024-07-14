@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: pipeline-{PIPELINE_ID}-service
+  labels:
+    app: pipeline-{PIPELINE_ID}
+    monitored: "true"
+spec:
+  ports:
+    - name: metrics
+      port: 3000
+      targetPort: 3000
+  selector:
+    app: pipeline-{PIPELINE_ID}

@@ -16,6 +16,9 @@ spec:
         - name: inflect
           image: inflect:latest
           imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              name: metrics
           env:
             - name: PIPELINE_ID
               value: "{PIPELINE_ID}"

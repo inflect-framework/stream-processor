@@ -1,6 +1,10 @@
-const { Kafka } = require('kafkajs');
-const dotenv = require('dotenv').config();
-const { SchemaRegistry, SchemaType } = require('@kafkajs/confluent-schema-registry');
+const { Kafka } = require("kafkajs");
+const dotenv = require("dotenv").config();
+const {
+  SchemaRegistry,
+  SchemaType,
+} = require("@kafkajs/confluent-schema-registry");
+const { messageCounter } = require("../metrics");
 
 const APIKEY = process.env.APIKEY;
 const APISECRET = process.env.APISECRET;
@@ -10,14 +14,14 @@ const REGISTRY_APIKEY = process.env.REGISTRY_APIKEY;
 const REGISTRY_APISECRET = process.env.REGISTRY_APISECRET;
 
 const kafka = new Kafka({
-  clientId: 'protobuf-producer',
+  clientId: "protobuf-producer",
   brokers: [BROKER],
   ssl: true,
   sasl: {
-    mechanism: 'plain',
+    mechanism: "plain",
     username: APIKEY,
-    password: APISECRET
-  }
+    password: APISECRET,
+  },
 });
 
 const producer = kafka.producer();
@@ -26,8 +30,8 @@ const registry = new SchemaRegistry({
   host: REGISTRY_URL,
   auth: {
     username: REGISTRY_APIKEY,
-    password: REGISTRY_APISECRET
-  }
+    password: REGISTRY_APISECRET,
+  },
 });
 
 const protobufSchema = `
@@ -46,10 +50,13 @@ const run = async () => {
 
   let schemaId;
   try {
-    const { id } = await registry.register({ type: SchemaType.PROTOBUF, schema: protobufSchema }, { subject: 'schema_c' });
+    const { id } = await registry.register(
+      { type: SchemaType.PROTOBUF, schema: protobufSchema },
+      { subject: "schema_c" }
+    );
     schemaId = id;
   } catch (error) {
-    console.error('Failed to register and fetch schema ID:', error);
+    console.error("Failed to register and fetch schema ID:", error);
     return;
   }
 
@@ -66,17 +73,25 @@ const run = async () => {
     }
 
     await producer.send({
-      topic: 'source_c',
+      topic: "source_c",
       messages: messages,
     });
+    messageCounter
+      .labels("producer", "source_c", "produced")
+      .inc(messages.length);
+    console.log(
+      `Produced batch ${batchNumber} with ${messages.length} messages`
+    );
 
-    console.log(`Produced batch ${batchNumber} with ${messages.length} messages`);
+    console.log(
+      `Produced batch ${batchNumber} with ${messages.length} messages`
+    );
   };
 
   let batchNumber = 0;
   while (true) {
     await produceMessages(batchNumber++);
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 };
 

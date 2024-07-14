@@ -19,7 +19,10 @@ spec:
             - name: POSTGRES_DB
               value: inflect
             - name: POSTGRES_PASSWORD
-              value: mysecretpassword
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
           resources:
             limits:
               cpu: "1"

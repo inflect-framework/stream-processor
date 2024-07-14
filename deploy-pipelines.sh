@@ -57,14 +57,20 @@ do
   sed "s/{PIPELINE_ID}/$PIPELINE_ID/g; s/replicas: 3/replicas: $REPLICAS/g" pipeline-deployment-template.yaml > pipeline-$PIPELINE_ID-deployment.yaml
   echo "Created deployment file for pipeline $PIPELINE_ID"
   kubectl apply -f pipeline-$PIPELINE_ID-deployment.yaml
+
+  # Create service for each pipeline
+  sed "s/{PIPELINE_ID}/$PIPELINE_ID/g" pipeline-service-monitor-template.yaml > pipeline-$PIPELINE_ID-service.yaml
+  echo "Created service file for pipeline $PIPELINE_ID"
+  kubectl apply -f pipeline-$PIPELINE_ID-service.yaml
+
   force_deployment_update $PIPELINE_ID
-  
+
   echo "Deleting existing pods for pipeline $PIPELINE_ID"
   kubectl delete pods -l app=pipeline-$PIPELINE_ID --force --grace-period=0
-  
+
   echo "Waiting for new pods to be created"
   sleep 10
-  
+
   echo "Checking pod status for pipeline $PIPELINE_ID"
   kubectl get pods -l app=pipeline-$PIPELINE_ID
   echo "Events for pipeline $PIPELINE_ID pods:"

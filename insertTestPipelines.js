@@ -1,10 +1,10 @@
-const { Client } = require('pg');
-require('dotenv').config();
+const { Client } = require("pg");
+require("dotenv").config();
 
 const pgClient = new Client({
   user: process.env.PGUSER,
   host: process.env.PGHOST,
-  database: 'inflect',
+  database: "inflect",
   password: process.env.PGPASSWORD,
   port: process.env.PGPORT,
 });
@@ -15,30 +15,30 @@ async function insertTestData() {
 
     const pipelines = [
       {
-        name: 'pipeline_a',
-        source_topic: 'source_a',
-        target_topic: 'target_a',
-        incoming_schema: 'schema_a',
-        outgoing_schema: 'schema_a',
-        steps: { processors: ['1'], dlq: [17] },
+        name: "pipeline_a",
+        source_topic: "source_a",
+        target_topic: "target_a",
+        incoming_schema: "schema_a",
+        outgoing_schema: "schema_a",
+        steps: { processors: ["1"], dlq: [17] },
         is_active: true,
       },
       {
-        name: 'pipeline_b',
-        source_topic: 'source_b',
-        target_topic: 'target_b',
-        incoming_schema: 'schema_b',
-        outgoing_schema: 'schema_b',
-        steps: { processors: ['1'], dlq: [null, 17] },
+        name: "pipeline_b",
+        source_topic: "source_b",
+        target_topic: "target_b",
+        incoming_schema: "schema_b",
+        outgoing_schema: "schema_b",
+        steps: { processors: ["1"], dlq: [null, 17] },
         is_active: true,
       },
       {
-        name: 'pipeline_c',
-        source_topic: 'source_c',
-        target_topic: 'target_c',
-        incoming_schema: 'schema_c',
-        outgoing_schema: 'schema_c',
-        steps: { processors: ['1'], dlq: [17] },
+        name: "pipeline_c",
+        source_topic: "source_c",
+        target_topic: "target_c",
+        incoming_schema: "schema_c",
+        outgoing_schema: "schema_c",
+        steps: { processors: ["1"], dlq: [17] },
         is_active: true,
       },
     ];
@@ -69,16 +69,19 @@ async function insertTestData() {
       await pgClient.query(query, values);
     }
 
-    console.log('Test data inserted successfully');
+    console.log("Test data inserted successfully");
   } catch (error) {
-    console.error('Error inserting test data:', error);
+    console.error("Error inserting test data:", error);
   } finally {
     await pgClient.end();
   }
 }
 
 async function getTopicId(topicName) {
-  const res = await pgClient.query('SELECT id FROM topics WHERE topic_name = $1', [topicName]);
+  const res = await pgClient.query(
+    "SELECT id FROM topics WHERE topic_name = $1",
+    [topicName]
+  );
   if (res.rows.length === 0) {
     throw new Error(`Topic ${topicName} not found`);
   }
@@ -86,7 +89,10 @@ async function getTopicId(topicName) {
 }
 
 async function getSchemaId(schemaName) {
-  const res = await pgClient.query('SELECT id FROM schemas WHERE schema_name = $1', [schemaName]);
+  const res = await pgClient.query(
+    "SELECT id FROM schemas WHERE schema_name = $1",
+    [schemaName]
+  );
   if (res.rows.length === 0) {
     throw new Error(`Schema ${schemaName} not found`);
   }
