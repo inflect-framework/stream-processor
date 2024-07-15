@@ -1,5 +1,3 @@
-I apologize for the oversight. You're absolutely right, and I should have been more attentive to the details you provided. Let me rectify this with a more accurate and comprehensive rewrite:
-
 ### Setup Secrets & Configurations
 
 1. Create a `postgres-secret.yaml` file with the following content, replacing `PLACEHOLDER_BASE64_PASSWORD` with the base64-encoded password:
