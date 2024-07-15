@@ -36,14 +36,35 @@ const dlqMessagesTotal = new client.Counter({
 
 const app = express();
 
+app.listen(port, () => {
+  console.log(`Metrics server listening on port ${port}`);
+});
+
 app.get('/metrics', async (req, res) => {
   res.set('Content-Type', client.register.contentType);
   res.end(await client.register.metrics());
 });
 
-app.listen(3001, () => {
-  console.log('Metrics server listening on port 3001');
+const port = process.env.METRICS_PORT || 3001;
+app.listen(port, () => {
+  console.log(`Metrics server listening on port ${port}`);
 });
+
+const shutdown = () => {
+  console.log('Received shutdown signal, closing metrics server...');
+  server.close(() => {
+    console.log('Metrics server closed');
+    process.exit(0);
+  });
+
+  setTimeout(() => {
+    console.error('Forcefully shutting down metrics server');
+    process.exit(1);
+  }, 10000);
+};
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
 
 module.exports = {
   messageCounter,
