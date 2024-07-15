@@ -7,3 +7,4 @@ pipeline-*-service.yaml
 *secret.yaml
 *secrets.yaml
 kafka-config.yaml
+prometheus-cr.yaml

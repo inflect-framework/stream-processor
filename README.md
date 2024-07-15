@@ -1,3 +1,5 @@
+I apologize for the oversight. You're absolutely right, and I should have been more attentive to the details you provided. Let me rectify this with a more accurate and comprehensive rewrite:
+
 ### Setup Secrets & Configurations
 
 1. Create a `postgres-secret.yaml` file with the following content, replacing `PLACEHOLDER_BASE64_PASSWORD` with the base64-encoded password:
@@ -51,6 +53,88 @@ data:
   url: PLACEHOLDER_BASE64_VALUE
 ```
 
+5. Create a `prometheus-cr.yaml` file with the following content:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: Prometheus
+metadata:
+  name: prometheus-kube-prometheus-prometheus
+  namespace: default
+  labels:
+    app: kube-prometheus-stack-prometheus
+    app.kubernetes.io/instance: prometheus
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: kube-prometheus-stack
+    app.kubernetes.io/version: 61.3.1
+    chart: kube-prometheus-stack-61.3.1
+    heritage: Helm
+    release: prometheus
+spec:
+  alerting:
+    alertmanagers:
+      - apiVersion: v2
+        name: prometheus-kube-prometheus-alertmanager
+        namespace: default
+        pathPrefix: /
+        port: http-web
+  automountServiceAccountToken: true
+  enableAdminAPI: false
+  evaluationInterval: 30s
+  externalUrl: http://prometheus-kube-prometheus-prometheus.default:9090
+  hostNetwork: false
+  image: quay.io/prometheus/prometheus:v2.53.1
+  listenLocal: false
+  logFormat: logfmt
+  logLevel: info
+  paused: false
+  podMonitorNamespaceSelector: {}
+  podMonitorSelector:
+    matchLabels:
+      release: prometheus
+  portName: http-web
+  probeNamespaceSelector: {}
+  probeSelector:
+    matchLabels:
+      release: prometheus
+  replicas: 1
+  retention: 15d
+  routePrefix: /
+  ruleNamespaceSelector: {}
+  ruleSelector:
+    matchLabels:
+      release: prometheus
+  scrapeConfigNamespaceSelector: {}
+  scrapeConfigSelector:
+    matchLabels:
+      release: prometheus
+  scrapeInterval: 30s
+  securityContext:
+    fsGroup: 2000
+    runAsGroup: 2000
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  serviceAccountName: prometheus-kube-prometheus-prometheus
+  serviceMonitorNamespaceSelector: {}
+  serviceMonitorSelector:
+    matchLabels:
+      release: prometheus
+  shards: 1
+  storage:
+    volumeClaimTemplate:
+      spec:
+        accessModes: ['ReadWriteOnce']
+        resources:
+          requests:
+            storage: 50Gi # Adjust this value based on your needs
+  tsdb:
+    outOfOrderTimeWindow: 0s
+  version: v2.53.1
+  walCompression: true
+```
+
 ### Deployment Steps
 
 Run the following shell commands:
@@ -67,6 +151,9 @@ kubectl apply -f postgres-deployment.yaml
 
 # Deploy service monitor for Prometheus
 kubectl apply -f service-monitor-inflect.yaml
+
+# Apply Prometheus configuration
+kubectl apply -f prometheus-cr.yaml
 
 # Deploy pipelines
 ./deploy-pipelines.sh
