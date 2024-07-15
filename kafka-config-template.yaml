@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-config
+data:
+  broker-url: cGtjLTkyMWptLnVzLWVhc3QtMi5hd3MuY29uZmx1ZW50LmNsb3VkOjkwOTI=
+  registry-url: aHR0cHM6Ly9wc3JjLXlnOTA2LnVzLWVhc3QtMi5hd3MuY29uZmx1ZW50LmNsb3Vk
