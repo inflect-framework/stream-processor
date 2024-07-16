@@ -35,17 +35,13 @@ const dlqMessagesTotal = new client.Counter({
 });
 
 const app = express();
-
-app.listen(port, () => {
-  console.log(`Metrics server listening on port ${port}`);
-});
+const port = process.env.METRICS_PORT || 3001;
 
 app.get('/metrics', async (req, res) => {
   res.set('Content-Type', client.register.contentType);
   res.end(await client.register.metrics());
 });
 
-const port = process.env.METRICS_PORT || 3001;
 app.listen(port, () => {
   console.log(`Metrics server listening on port ${port}`);
 });
