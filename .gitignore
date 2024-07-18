@@ -2,5 +2,5 @@
 .env
 node_modules
 scratchpad.txt
-pipeline-*-deployment.yaml
+deployments/pipeline-*-*.yaml
 inflect_prototype_3.sql

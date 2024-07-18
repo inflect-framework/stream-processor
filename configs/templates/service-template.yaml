@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: pipeline-{{PIPELINE_ID}}-metrics
+  namespace: inflect
+  labels:
+    app: pipeline-{{PIPELINE_ID}}
+spec:
+  selector:
+    app: pipeline-{{PIPELINE_ID}}
+  ports:
+  - name: metrics
+    port: 3000
+    targetPort: 3000

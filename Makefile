@@ -1,7 +1,7 @@
 .PHONY: deploy cleanup
 
 deploy:
-	./deploy-pipelines.sh
+	./scripts/deploy-pipelines.sh
 
 cleanup:
-	./cleanup.sh
+	./scripts/cleanup.sh

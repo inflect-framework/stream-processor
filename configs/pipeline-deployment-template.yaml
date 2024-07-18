@@ -1,17 +1,17 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: pipeline-{PIPELINE_ID}
+  name: pipeline-{{PIPELINE_ID}}
   namespace: inflect
 spec:
   replicas: 3
   selector:
     matchLabels:
-      app: pipeline-{PIPELINE_ID}
+      app: pipeline-{{PIPELINE_ID}}
   template:
     metadata:
       labels:
-        app: pipeline-{PIPELINE_ID}
+        app: pipeline-{{PIPELINE_ID}}
     spec:
       containers:
       - name: inflect
@@ -19,7 +19,7 @@ spec:
         imagePullPolicy: Never
         env:
         - name: PIPELINE_ID
-          value: "{PIPELINE_ID}"
+          value: "{{PIPELINE_ID}}"
         - name: APIKEY
           valueFrom:
             secretKeyRef:
@@ -69,3 +69,6 @@ spec:
             configMapKeyRef:
               name: kafka-config
               key: registry-url
+        ports:
+        - containerPort: 3000
+          name: metrics

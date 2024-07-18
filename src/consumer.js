@@ -1,7 +1,9 @@
 const { Kafka } = require('kafkajs');
 const dotenv = require('dotenv').config();
 const { SchemaRegistry } = require('@kafkajs/confluent-schema-registry');
-const db = require('./db');
+const db = require('../db');
+const promClient = require('prom-client');
+const http = require('http');
 
 const APIKEY = process.env.APIKEY;
 const APISECRET = process.env.APISECRET;
@@ -9,6 +11,8 @@ const BROKER = process.env.BROKER;
 const REGISTRY_URL = process.env.REGISTRY_URL;
 const REGISTRY_APIKEY = process.env.REGISTRY_APIKEY;
 const REGISTRY_APISECRET = process.env.REGISTRY_APISECRET;
+const PIPELINE_ID = process.env.PIPELINE_ID;
+const POD_NAME = process.env.HOSTNAME || 'unknown-pod';
 
 const kafka = new Kafka({
   clientId: 'my-consumer',
@@ -30,6 +34,37 @@ const registry = new SchemaRegistry({
   }
 });
 
+const register = new promClient.Registry();
+
+const messageProcessedCounter = new promClient.Counter({
+  name: 'message_processed_total',
+  help: 'Total number of messages processed',
+  labelNames: ['pipeline_id', 'pod_name', 'status']
+});
+register.registerMetric(messageProcessedCounter);
+
+const messageProcessingDuration = new promClient.Histogram({
+  name: 'message_processing_duration_seconds',
+  help: 'Duration of message processing in seconds',
+  labelNames: ['pipeline_id', 'pod_name', 'step']
+});
+register.registerMetric(messageProcessingDuration);
+
+promClient.collectDefaultMetrics({ register });
+
+const server = http.createServer(async (req, res) => {
+  if (req.url === '/metrics') {
+    res.setHeader('Content-Type', register.contentType);
+    res.end(await register.metrics());
+  } else {
+    res.statusCode = 404;
+    res.end('Not Found');
+  }
+});
+server.listen(3000, () => {
+  console.log('Metrics server is running on port 3000');
+});
+
 const getProcessorName = async (processorId) => {
   const result = await db.query('SELECT processor_name FROM processors WHERE id = $1', [processorId]);
   if (result.rowCount === 0) {
@@ -49,19 +84,24 @@ const getDlqTopicName = async (topicId) => {
 const applyTransformations = async (message, steps, dlqSteps) => {
   let transformedMessage = { ...message };
   for (let i = 0; i < steps.length; i++) {
+    const end = messageProcessingDuration.startTimer({ step: steps[i], pipeline_id: PIPELINE_ID, pod_name: POD_NAME });
     const processorName = await getProcessorName(steps[i]);
     const transformation = require(`./transformations/${processorName}`);
     transformedMessage = transformation(transformedMessage);
+    end();
 
     if (!transformedMessage) {
       if (dlqSteps && dlqSteps[i]) {
         const dlqTopicName = await getDlqTopicName(dlqSteps[i]);
+        messageProcessedCounter.inc({ status: 'error', pipeline_id: PIPELINE_ID, pod_name: POD_NAME });
         return { dlqMessage: message, dlqTopicName };
       } else {
+        messageProcessedCounter.inc({ status: 'error', pipeline_id: PIPELINE_ID, pod_name: POD_NAME });
         return { transformedMessage: null };
       }
     }
   }
+  messageProcessedCounter.inc({ status: 'success', pipeline_id: PIPELINE_ID, pod_name: POD_NAME });
   return { transformedMessage };
 };
 

@@ -8,8 +8,8 @@ command -v kubectl >/dev/null 2>&1 || { echo "kubectl is required but not instal
 
 # Source the environment file
 if [ ! -f .env ]; then
-    echo ".env file not found. Please create one based on .env.example. Aborting." >&2
-    exit 1
+    echo ".env file not found. Please create one based on .env.example. Aborting." >&2;
+    exit 1;
 fi
 source .env
 
@@ -156,7 +156,7 @@ sleep 30
 PG_POD=$(kubectl get pods -n $NAMESPACE -l app=postgres -o jsonpath="{.items[0].metadata.name}")
 
 # Copy the dump file to the pod
-kubectl cp $DUMP_FILE $NAMESPACE/$PG_POD:/tmp/dump.sql
+kubectl cp sql/inflect_prototype_3.sql $NAMESPACE/$PG_POD:/tmp/dump.sql
 
 # Create the database if it doesn't exist, ignoring the error if it already exists
 kubectl exec -n $NAMESPACE $PG_POD -- bash -c "PGPASSWORD=$DB_PASSWORD psql -U $DB_USER -c 'CREATE DATABASE $DB_NAME;'" || true
@@ -188,13 +188,23 @@ do
   
   echo "Number of replicas for pipeline $PIPELINE_ID: $REPLICAS"
   
-  sed "s/{PIPELINE_ID}/$PIPELINE_ID/g; s/replicas: 3/replicas: $REPLICAS/g" pipeline-deployment-template.yaml > pipeline-$PIPELINE_ID-deployment.yaml
+  # Replace placeholders and create temporary deployment file
+  sed "s/{{PIPELINE_ID}}/$PIPELINE_ID/g; s/replicas: 3/replicas: $REPLICAS/g" configs/pipeline-deployment-template.yaml > deployments/pipeline-$PIPELINE_ID-deployment.yaml
   
   echo "Created deployment file for pipeline $PIPELINE_ID"
   
-  kubectl apply -f pipeline-$PIPELINE_ID-deployment.yaml
+  # Apply the deployment
+  kubectl apply -f deployments/pipeline-$PIPELINE_ID-deployment.yaml
   
-  echo "Deployed pipeline $PIPELINE_ID with $REPLICAS replicas"
+  # Create and apply service file
+  sed "s/{{PIPELINE_ID}}/$PIPELINE_ID/g" configs/templates/service-template.yaml > deployments/pipeline-$PIPELINE_ID-service.yaml
+  kubectl apply -f deployments/pipeline-$PIPELINE_ID-service.yaml
+  
+  # Create and apply servicemonitor file
+  sed "s/{{PIPELINE_ID}}/$PIPELINE_ID/g" configs/templates/servicemonitor-template.yaml > deployments/pipeline-$PIPELINE_ID-servicemonitor.yaml
+  kubectl apply -f deployments/pipeline-$PIPELINE_ID-servicemonitor.yaml
+  
+  echo "Deployed pipeline $PIPELINE_ID with $REPLICAS replicas and monitoring"
 done
 
 echo "Deployment process completed."
