@@ -1,7 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: kafka-config
-stringData:
-  broker-url: 'your-broker-url'
-  registry-url: 'your-registry-url'

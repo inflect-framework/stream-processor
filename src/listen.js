@@ -1,15 +1,31 @@
-const db = require("./db");
-const consumeMessages = require("./consumer");
+const db = require('./db');
+const runConsumer = require('./consumer');
+const http = require('http');
+const { register } = require('./metrics');
+
+const PIPELINE_ID = process.env.PIPELINE_ID;
+
+const server = http.createServer(async (req, res) => {
+  if (req.url === '/metrics') {
+    res.setHeader('Content-Type', register.contentType);
+    res.end(await register.metrics());
+  } else {
+    res.statusCode = 404;
+    res.end('Not Found');
+  }
+});
+
+server.listen(3000, () => {
+  console.log('Metrics server is running on port 3000');
+});
 
 async function main() {
-  const pipelineId = process.env.PIPELINE_ID;
-
-  if (!pipelineId) {
-    console.error("PIPELINE_ID environment variable is not set. Exiting.");
+  if (!PIPELINE_ID) {
+    console.error('PIPELINE_ID environment variable is not set. Exiting.');
     process.exit(1);
   }
 
-  await handleSpecificPipeline(pipelineId);
+  await handleSpecificPipeline(PIPELINE_ID);
 }
 
 async function handleSpecificPipeline(pipelineId) {
@@ -65,36 +81,19 @@ async function handlePipeline(payload) {
   const incomingSchema = incomingSchemaResult.rows[0].schema_name;
   const outgoingSchema = outgoingSchemaResult.rows[0].schema_name;
 
-  console.log("Handling pipeline for:", {
-    name,
-    sourceTopic,
-    targetTopic,
-    incomingSchema,
-    outgoingSchema,
-    steps,
-  });
-  await consumeMessages(
-    sourceTopic,
-    targetTopic,
-    steps,
-    incomingSchema,
-    outgoingSchema
-  );
-  console.log("Pipeline started for", {
-    name,
-    sourceTopic,
-    targetTopic,
-    incomingSchema,
-    outgoingSchema,
-    steps,
-  });
+  console.log('Handling pipeline for:', { name, sourceTopic, targetTopic, incomingSchema, outgoingSchema, steps });
+  await runConsumer(sourceTopic, targetTopic, steps, incomingSchema, outgoingSchema);
+  console.log('Pipeline started for', { name, sourceTopic, targetTopic, incomingSchema, outgoingSchema, steps });
 }
 
 const shutdown = async () => {
   console.log("Listener shutdown initiated");
   try {
-    await db.end(); // Close database connection
-    process.exit(0);
+    await db.end();
+    server.close(() => {
+      console.log('HTTP server closed');
+      process.exit(0);
+    });
   } catch (error) {
     console.error("Error during shutdown", error);
     process.exit(1);

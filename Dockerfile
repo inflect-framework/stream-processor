@@ -1,6 +1,11 @@
 FROM node:21
+
 WORKDIR /usr/src/app
+
 COPY package*.json ./
 RUN npm install
-COPY . .
-CMD ["node", "listen.js"]
+
+COPY src ./src
+COPY configs ./configs
+
+CMD [ "node", "src/listen.js" ]
