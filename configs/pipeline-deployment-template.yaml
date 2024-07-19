@@ -72,3 +72,4 @@ spec:
         ports:
         - containerPort: 3000
           name: metrics
+          protocol: TCP

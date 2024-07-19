@@ -4,3 +4,4 @@ node_modules
 scratchpad.txt
 deployments/pipeline-*-*.yaml
 inflect_prototype_3.sql
+values.yaml

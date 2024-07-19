@@ -1,9 +1,8 @@
 const { Kafka } = require('kafkajs');
 const dotenv = require('dotenv').config();
 const { SchemaRegistry } = require('@kafkajs/confluent-schema-registry');
-const db = require('../db');
-const promClient = require('prom-client');
-const http = require('http');
+const db = require('./db');
+const { messageProcessedCounter, messageProcessingDuration } = require('./metrics');
 
 const APIKEY = process.env.APIKEY;
 const APISECRET = process.env.APISECRET;
@@ -25,6 +24,8 @@ const kafka = new Kafka({
   }
 });
 
+console.log('Kafka client initialized');
+
 const producer = kafka.producer();
 const registry = new SchemaRegistry({
   host: REGISTRY_URL,
@@ -34,36 +35,7 @@ const registry = new SchemaRegistry({
   }
 });
 
-const register = new promClient.Registry();
-
-const messageProcessedCounter = new promClient.Counter({
-  name: 'message_processed_total',
-  help: 'Total number of messages processed',
-  labelNames: ['pipeline_id', 'pod_name', 'status']
-});
-register.registerMetric(messageProcessedCounter);
-
-const messageProcessingDuration = new promClient.Histogram({
-  name: 'message_processing_duration_seconds',
-  help: 'Duration of message processing in seconds',
-  labelNames: ['pipeline_id', 'pod_name', 'step']
-});
-register.registerMetric(messageProcessingDuration);
-
-promClient.collectDefaultMetrics({ register });
-
-const server = http.createServer(async (req, res) => {
-  if (req.url === '/metrics') {
-    res.setHeader('Content-Type', register.contentType);
-    res.end(await register.metrics());
-  } else {
-    res.statusCode = 404;
-    res.end('Not Found');
-  }
-});
-server.listen(3000, () => {
-  console.log('Metrics server is running on port 3000');
-});
+console.log('Kafka producer and Schema Registry initialized');
 
 const getProcessorName = async (processorId) => {
   const result = await db.query('SELECT processor_name FROM processors WHERE id = $1', [processorId]);

@@ -6,9 +6,9 @@ metadata:
   labels:
     app: pipeline-{{PIPELINE_ID}}
 spec:
-  selector:
-    app: pipeline-{{PIPELINE_ID}}
   ports:
   - name: metrics
     port: 3000
     targetPort: 3000
+  selector:
+    app: pipeline-{{PIPELINE_ID}}

@@ -5,6 +5,8 @@ set -e
 
 # Check for required tools
 command -v kubectl >/dev/null 2>&1 || { echo "kubectl is required but not installed. Aborting." >&2; exit 1; }
+command -v docker >/dev/null 2>&1 || { echo "docker is required but not installed. Aborting." >&2; exit 1; }
+command -v minikube >/dev/null 2>&1 || { echo "minikube is required but not installed. Aborting." >&2; exit 1; }
 
 # Source the environment file
 if [ ! -f .env ]; then
@@ -22,6 +24,16 @@ source .env
 [[ -z "$REGISTRY_APIKEY" ]] && { echo "REGISTRY_APIKEY is not set in .env. Aborting." >&2; exit 1; }
 [[ -z "$REGISTRY_APISECRET" ]] && { echo "REGISTRY_APISECRET is not set in .env. Aborting." >&2; exit 1; }
 [[ -z "$REGISTRY_URL" ]] && { echo "REGISTRY_URL is not set in .env. Aborting." >&2; exit 1; }
+
+# Check Minikube status
+minikube status || minikube start
+
+# Configure Docker to use Minikube's Docker daemon
+eval $(minikube docker-env)
+
+# Build the Docker image
+echo "Building Docker image..."
+docker build -t inflect:latest .
 
 # Check Kubernetes context
 echo "Current Kubernetes context: $(kubectl config current-context)"
