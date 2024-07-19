@@ -3,3 +3,8 @@
 node_modules
 scratchpad.txt
 pipeline-*-deployment.yaml
+pipeline-*-service.yaml
+*secret.yaml
+*secrets.yaml
+kafka-config.yaml
+prometheus-cr.yaml

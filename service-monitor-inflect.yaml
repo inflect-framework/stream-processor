@@ -1,0 +1,13 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: inflect-monitor
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      monitored: "true"
+  endpoints:
+    - port: metrics
+      interval: 15s
