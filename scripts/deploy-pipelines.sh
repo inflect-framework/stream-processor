@@ -3,10 +3,21 @@
 # Exit immediately if a command exits with a non-zero status.
 set -e
 
+# Function to check if a command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Function to check if a Kubernetes resource exists
+resource_exists() {
+    kubectl get "$1" "$2" -n "$3" >/dev/null 2>&1
+}
+
 # Check for required tools
-command -v kubectl >/dev/null 2>&1 || { echo "kubectl is required but not installed. Aborting." >&2; exit 1; }
-command -v docker >/dev/null 2>&1 || { echo "docker is required but not installed. Aborting." >&2; exit 1; }
-command -v minikube >/dev/null 2>&1 || { echo "minikube is required but not installed. Aborting." >&2; exit 1; }
+command_exists kubectl || { echo "kubectl is required but not installed. Aborting." >&2; exit 1; }
+command_exists docker || { echo "docker is required but not installed. Aborting." >&2; exit 1; }
+command_exists minikube || { echo "minikube is required but not installed. Aborting." >&2; exit 1; }
+command_exists helm || { echo "helm is required but not installed. Aborting." >&2; exit 1; }
 
 # Source the environment file
 if [ ! -f .env ]; then
@@ -64,6 +75,51 @@ PG_SERVICE_NAME="inflect-postgres-service"
 PG_SECRET_NAME="inflect-postgres-secrets"
 PG_STORAGE_CLASS="standard"  # adjust as needed
 PG_STORAGE_SIZE="5Gi"        # adjust as needed
+
+# Function to deploy Prometheus
+deploy_prometheus() {
+    echo "Deploying Prometheus..."
+    
+    # Clean up existing Prometheus resources
+    kubectl delete clusterrole --selector=app.kubernetes.io/name=prometheus-operator --ignore-not-found
+    kubectl delete clusterrolebinding --selector=app.kubernetes.io/name=prometheus-operator --ignore-not-found
+    kubectl delete crd --selector=app.kubernetes.io/name=prometheus-operator --ignore-not-found
+
+    # Delete any remaining CRDs manually
+    kubectl delete crd alertmanagerconfigs.monitoring.coreos.com --ignore-not-found
+    kubectl delete crd alertmanagers.monitoring.coreos.com --ignore-not-found
+    kubectl delete crd podmonitors.monitoring.coreos.com --ignore-not-found
+    kubectl delete crd probes.monitoring.coreos.com --ignore-not-found
+    kubectl delete crd prometheuses.monitoring.coreos.com --ignore-not-found
+    kubectl delete crd prometheusrules.monitoring.coreos.com --ignore-not-found
+    kubectl delete crd servicemonitors.monitoring.coreos.com --ignore-not-found
+    kubectl delete crd thanosrulers.monitoring.coreos.com --ignore-not-found
+
+    # Add Prometheus Helm repo
+    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+    helm repo update
+
+    # Uninstall existing Prometheus installation if it exists
+    helm uninstall prometheus -n $NAMESPACE --ignore-not-found
+
+    # Wait for resources to be fully removed
+    echo "Waiting for Prometheus resources to be fully removed..."
+    sleep 30
+
+    # Install Prometheus
+    helm install prometheus prometheus-community/kube-prometheus-stack \
+        --namespace $NAMESPACE \
+        --create-namespace \
+        --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false \
+        --set prometheus.prometheusSpec.serviceMonitorNamespaceSelector.matchNames[0]=$NAMESPACE \
+        --set grafana.namespaceOverride=$NAMESPACE \
+        --set prometheusOperator.namespaceOverride=$NAMESPACE \
+        --set prometheus.namespaceOverride=$NAMESPACE \
+        --set alertmanager.namespaceOverride=$NAMESPACE \
+        --set global.rbac.createAggregateClusterRoles=false
+
+    echo "Prometheus deployed successfully."
+}
 
 # Create namespace if it doesn't exist
 kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
@@ -178,6 +234,9 @@ echo "Restoring the database dump..."
 kubectl exec -n $NAMESPACE $PG_POD -- bash -c "PGPASSWORD=$DB_PASSWORD psql -U $DB_USER -d $DB_NAME < /tmp/dump.sql"
 
 echo "PostgreSQL deployed and initialized with the provided dump."
+
+# Deploy Prometheus
+deploy_prometheus
 
 # Now proceed with pipeline deployment
 PIPELINES=$(kubectl exec -n $NAMESPACE $PG_POD -- psql -U $DB_USER -d $DB_NAME -t -c "SELECT id FROM pipelines WHERE is_active = true")
