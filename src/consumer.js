@@ -1,14 +1,8 @@
-const { Kafka } = require("kafkajs");
-const dotenv = require("dotenv").config();
-const { SchemaRegistry } = require("@kafkajs/confluent-schema-registry");
-const db = require("./db");
-const {
-  messageCounter,
-  processingDuration,
-  kafkaConsumerLag,
-  transformationSuccessRate,
-  dlqMessagesTotal,
-} = require("./metrics");
+const { Kafka } = require('kafkajs');
+const dotenv = require('dotenv').config();
+const { SchemaRegistry } = require('@kafkajs/confluent-schema-registry');
+const db = require('./db');
+const { messageProcessedCounter, messageProcessingDuration } = require('./metrics');
 
 const APIKEY = process.env.APIKEY;
 const APISECRET = process.env.APISECRET;
@@ -16,6 +10,8 @@ const BROKER = process.env.BROKER;
 const REGISTRY_URL = process.env.REGISTRY_URL;
 const REGISTRY_APIKEY = process.env.REGISTRY_APIKEY;
 const REGISTRY_APISECRET = process.env.REGISTRY_APISECRET;
+const PIPELINE_ID = process.env.PIPELINE_ID;
+const POD_NAME = process.env.HOSTNAME || 'unknown-pod';
 
 const kafka = new Kafka({
   clientId: "my-consumer",
@@ -28,6 +24,8 @@ const kafka = new Kafka({
   },
 });
 
+console.log('Kafka client initialized');
+
 const producer = kafka.producer();
 const registry = new SchemaRegistry({
   host: REGISTRY_URL,
@@ -36,6 +34,8 @@ const registry = new SchemaRegistry({
     password: REGISTRY_APISECRET,
   },
 });
+
+console.log('Kafka producer and Schema Registry initialized');
 
 const getProcessorName = async (processorId) => {
   const result = await db.query(
@@ -61,37 +61,24 @@ const getDlqTopicName = async (topicId) => {
 const applyTransformations = async (message, steps, dlqSteps) => {
   let transformedMessage = { ...message };
   for (let i = 0; i < steps.length; i++) {
-    const startTime = process.hrtime();
+    const end = messageProcessingDuration.startTimer({ step: steps[i], pipeline_id: PIPELINE_ID, pod_name: POD_NAME });
     const processorName = await getProcessorName(steps[i]);
     const transformation = require(`./transformations/${processorName}`);
     transformedMessage = transformation(transformedMessage);
-    const [seconds, nanoseconds] = process.hrtime(startTime);
-    const duration = seconds + nanoseconds / 1e9;
-    processingDuration
-      .labels(process.env.PIPELINE_ID, processorName)
-      .observe(duration);
-    console.log(
-      `Recorded processing duration for ${processorName}: ${duration}s`
-    );
-
-    if (transformedMessage) {
-      transformationSuccessRate
-        .labels(process.env.PIPELINE_ID, processorName)
-        .inc();
-      console.log(
-        `Incremented transformation success rate for ${processorName}`
-      );
-    }
+    end();
 
     if (!transformedMessage) {
       if (dlqSteps && dlqSteps[i]) {
         const dlqTopicName = await getDlqTopicName(dlqSteps[i]);
+        messageProcessedCounter.inc({ status: 'error', pipeline_id: PIPELINE_ID, pod_name: POD_NAME });
         return { dlqMessage: message, dlqTopicName };
       } else {
+        messageProcessedCounter.inc({ status: 'error', pipeline_id: PIPELINE_ID, pod_name: POD_NAME });
         return { transformedMessage: null };
       }
     }
   }
+  messageProcessedCounter.inc({ status: 'success', pipeline_id: PIPELINE_ID, pod_name: POD_NAME });
   return { transformedMessage };
 };
 

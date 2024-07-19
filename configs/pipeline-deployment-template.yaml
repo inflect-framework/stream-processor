@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pipeline-{{PIPELINE_ID}}
+  namespace: inflect
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: pipeline-{{PIPELINE_ID}}
+  template:
+    metadata:
+      labels:
+        app: pipeline-{{PIPELINE_ID}}
+    spec:
+      containers:
+      - name: inflect
+        image: inflect:latest
+        imagePullPolicy: Never
+        env:
+        - name: PIPELINE_ID
+          value: "{{PIPELINE_ID}}"
+        - name: APIKEY
+          valueFrom:
+            secretKeyRef:
+              name: kafka-secrets
+              key: apikey
+        - name: APISECRET
+          valueFrom:
+            secretKeyRef:
+              name: kafka-secrets
+              key: apisecret
+        - name: BROKER
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-config
+              key: broker-url
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: inflect-postgres-secrets
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: inflect-postgres-secrets
+              key: POSTGRES_PASSWORD
+        - name: POSTGRES_DB
+          valueFrom:
+            secretKeyRef:
+              name: inflect-postgres-secrets
+              key: POSTGRES_DB
+        - name: DATABASE_URL
+          value: "postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@inflect-postgres-service:5432/$(POSTGRES_DB)"
+        - name: KAFKAJS_NO_PARTITIONER_WARNING
+          value: "1"
+        - name: REGISTRY_APIKEY
+          valueFrom:
+            secretKeyRef:
+              name: kafka-secrets
+              key: registry-apikey
+        - name: REGISTRY_APISECRET
+          valueFrom:
+            secretKeyRef:
+              name: kafka-secrets
+              key: registry-apisecret
+        - name: REGISTRY_URL
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-config
+              key: registry-url
+        ports:
+        - containerPort: 3000
+          name: metrics
+          protocol: TCP

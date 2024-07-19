@@ -1,0 +1,15 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: pipeline-{{PIPELINE_ID}}-metrics
+  namespace: inflect
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: pipeline-{{PIPELINE_ID}}
+  endpoints:
+  - port: metrics
+    path: /metrics
+    interval: 15s
