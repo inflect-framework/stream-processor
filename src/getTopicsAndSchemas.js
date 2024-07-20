@@ -1,14 +1,14 @@
-const { Kafka } = require("kafkajs");
-const axios = require("axios");
-require("dotenv").config();
-const { Client } = require("pg");
+const { Kafka } = require('kafkajs');
+const axios = require('axios');
+require('dotenv').config();
+const { Client } = require('pg');
 
 const kafka = new Kafka({
-  clientId: "inflect-client",
+  clientId: 'inflect-client',
   brokers: [process.env.BROKER],
   ssl: true,
   sasl: {
-    mechanism: "plain",
+    mechanism: 'plain',
     username: process.env.APIKEY,
     password: process.env.APISECRET,
   },
@@ -23,7 +23,7 @@ const registryAuth = {
 const pgClient = new Client({
   user: process.env.PGUSER,
   host: process.env.PGHOST,
-  database: "inflect",
+  database: 'inflect',
   password: process.env.PGPASSWORD,
   port: process.env.PGPORT,
 });
@@ -58,21 +58,21 @@ async function getAndInsertTopicsAndSchemas() {
     for (const topic of topics) {
       await insertTopic(topic);
     }
-    console.log("Kafka Topics:", topics);
+    console.log('Kafka Topics:', topics);
 
     const subjectsResponse = await axios.get(`${registryUrl}/subjects`, {
-      auth: registryAuth,
+      auth: registryAuth
     });
     const subjects = subjectsResponse.data;
 
     for (const subject of subjects) {
       await insertSchema(subject);
     }
-    console.log("Schema Registry Subjects:", subjects);
+    console.log('Schema Registry Subjects:', subjects);
 
-    console.log("Topics and schemas inserted successfully");
+    console.log('Topics and schemas inserted successfully');
   } catch (error) {
-    console.error("Error listing topics and schemas:", error);
+    console.error('Error listing topics and schemas:', error);
   } finally {
     await pgClient.end();
   }

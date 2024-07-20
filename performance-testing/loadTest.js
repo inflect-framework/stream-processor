@@ -114,4 +114,4 @@ async function runLoadTest(durationSeconds) {
 }
 
 // pass duration in seconds of test as arg below
-runLoadTest(10).catch(console.error);
+runLoadTest(5).catch(console.error);
