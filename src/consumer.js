@@ -13,7 +13,7 @@ const PIPELINE_ID = process.env.PIPELINE_ID;
 const POD_NAME = process.env.HOSTNAME || 'unknown-pod';
 
 const kafka = new Kafka({
-  clientId: 'my-consumer',
+  clientId: `consumer-${POD_NAME}`,
   brokers: [BROKER],
   ssl: true,
   sasl: {
@@ -34,6 +34,7 @@ const registry = new SchemaRegistry({
 
 const processorNameCache = new Map();
 const dlqTopicNameCache = new Map();
+const schemaCache = new Map();
 
 const getProcessorName = async (processorId) => {
   if (processorNameCache.has(processorId)) {
@@ -73,42 +74,40 @@ const getDlqTopicName = async (topicId) => {
   }
 };
 
-const applyTransformationsParallel = async (message, steps, dlqSteps) => {
+const applyTransformationsAsync = async (message, steps, dlqSteps) => {
   let transformedMessage = { ...message };
   
-  const applyTransformation = async (index) => {
-    const processorName = await getProcessorName(steps[index]);
+  for (let i = 0; i < steps.length; i++) {
+    const processorName = await getProcessorName(steps[i]);
     const transformation = require(`./transformations/${processorName}`);
     try {
-      return transformation(transformedMessage);
+      transformedMessage = await transformation(transformedMessage);
     } catch (error) {
       console.error(`Error in transformation ${processorName}:`, error);
-      if (dlqSteps && dlqSteps[index]) {
-        const dlqTopicName = await getDlqTopicName(dlqSteps[index]);
-        throw { dlqMessage: message, dlqTopicName };
+      if (dlqSteps && dlqSteps[i]) {
+        const dlqTopicName = await getDlqTopicName(dlqSteps[i]);
+        return { dlqMessage: message, dlqTopicName };
       } else {
         throw new Error(`Transformation ${processorName} failed`);
       }
     }
-  };
-
-  try {
-    const transformations = steps.map((_, index) => applyTransformation(index));
-    const results = await Promise.all(transformations);
-    transformedMessage = results[results.length - 1];
-    return { transformedMessage };
-  } catch (error) {
-    if (error.dlqMessage) {
-      return error;
-    }
-    return { transformedMessage: null };
   }
+
+  return { transformedMessage };
 };
 
 const processMessage = async (message, steps, dlqSteps, schemaId) => {
   try {
-    const decodedMessage = await registry.decode(message.value);
-    const { transformedMessage, dlqMessage, dlqTopicName } = await applyTransformationsParallel(decodedMessage, steps, dlqSteps);
+    let decodedMessage;
+    if (schemaCache.has(schemaId)) {
+      decodedMessage = await registry.decode(message.value, schemaCache.get(schemaId));
+    } else {
+      const schema = await registry.getSchema(schemaId);
+      schemaCache.set(schemaId, schema);
+      decodedMessage = await registry.decode(message.value, schema);
+    }
+
+    const { transformedMessage, dlqMessage, dlqTopicName } = await applyTransformationsAsync(decodedMessage, steps, dlqSteps);
 
     if (dlqMessage) {
       const encodedDlqValue = await registry.encode(schemaId, dlqMessage);
@@ -128,15 +127,10 @@ const processMessage = async (message, steps, dlqSteps, schemaId) => {
 };
 
 const processBatch = async (messages, steps, dlqSteps, targetTopic, schemaId) => {
-  const transformedMessages = [];
+  const results = await Promise.all(messages.map(message => processMessage(message, steps, dlqSteps, schemaId)));
 
-  for (const message of messages) {
-    const result = await processMessage(message, steps, dlqSteps, schemaId);
-    transformedMessages.push(result);
-  }
-
-  const validMessages = transformedMessages.filter(msg => msg !== null && !msg.dlqTopicName);
-  const dlqMessages = transformedMessages.filter(msg => msg !== null && msg.dlqTopicName);
+  const validMessages = results.filter(msg => msg !== null && !msg.dlqTopicName);
+  const dlqMessages = results.filter(msg => msg !== null && msg.dlqTopicName);
 
   if (validMessages.length > 0) {
     await producer.send({
@@ -150,9 +144,10 @@ const processBatch = async (messages, steps, dlqSteps, targetTopic, schemaId) =>
       topic: dlqMessage.dlqTopicName,
       messages: [{ key: dlqMessage.key, value: dlqMessage.value }],
     });
-
     console.log(`Produced DLQ message to ${dlqMessage.dlqTopicName}`);
   }
+
+  return results.length;
 };
 
 let messageCount = 0;
@@ -170,21 +165,19 @@ setInterval(() => {
 }, 10000);
 
 const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSchema) => {
-  const pipelineId = process.env.PIPELINE_ID;
-  if (!pipelineId) {
+  if (!PIPELINE_ID) {
     throw new Error('PIPELINE_ID environment variable is not set');
   }
 
-  console.log(`Running consumer for pipeline ${pipelineId} with:`, { sourceTopic, targetTopic, steps, incomingSchema, outgoingSchema });
+  console.log(`Running consumer for pipeline ${PIPELINE_ID} with:`, { sourceTopic, targetTopic, steps, incomingSchema, outgoingSchema });
 
   const consumer = kafka.consumer({
-    groupId: `pipeline-${pipelineId}-${sourceTopic}-group`,
+    groupId: `pipeline-${PIPELINE_ID}-${sourceTopic}-group`,
     sessionTimeout: 30000,
     heartbeatInterval: 3000,
     maxPartitionFetchBytes: 10485760,
     fetchMaxBytes: 52428800,
     fetchMinBytes: 1,
-    maxPollRecords: 10000,
     maxPollIntervalMs: 300000,
   });
   
@@ -201,35 +194,40 @@ const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSche
     return;
   }
 
-  const batchSize = 1000;
+  const batchSize = 5000; // Increased batch size
 
   await consumer.run({
     eachBatchAutoResolve: false,
-    eachBatch: async ({ batch, resolveOffset, heartbeat, commitOffsetsIfNecessary }) => {
+    eachBatch: async ({ batch, resolveOffset, heartbeat, commitOffsetsIfNecessary, isRunning, isStale }) => {
       let messages = [];
+      let lastOffset;
 
       for (let message of batch.messages) {
+        if (!isRunning() || isStale()) break;
+
         messages.push({
           key: message.key ? message.key.toString() : null,
           value: message.value,
         });
 
+        lastOffset = message.offset;
+
         if (messages.length >= batchSize) {
-          await processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
-          messageCount += messages.length;
+          const processedCount = await processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
+          messageCount += processedCount;
           messages = [];
+          await commitOffsetsIfNecessary();
         }
 
-        resolveOffset(message.offset);
         await heartbeat();
       }
 
       if (messages.length > 0) {
-        await processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
-        messageCount += messages.length;
+        const processedCount = await processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
+        messageCount += processedCount;
       }
 
-      await commitOffsetsIfNecessary();
+      resolveOffset(lastOffset);
     },
   });
 

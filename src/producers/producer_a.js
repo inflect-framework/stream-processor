@@ -71,7 +71,7 @@ const run = async () => {
   let batchNumber = 0;
   while (true) {
     await produceMessages(batchNumber++);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 250));
   }
 };
 
