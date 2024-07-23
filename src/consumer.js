@@ -32,20 +32,45 @@ const registry = new SchemaRegistry({
   }
 });
 
+const processorNameCache = new Map();
+const dlqTopicNameCache = new Map();
+
 const getProcessorName = async (processorId) => {
-  const result = await db.query('SELECT processor_name FROM processors WHERE id = $1', [processorId]);
-  if (result.rowCount === 0) {
-    throw new Error(`Processor with id ${processorId} not found`);
+  if (processorNameCache.has(processorId)) {
+    return processorNameCache.get(processorId);
   }
-  return result.rows[0].processor_name;
+  
+  const client = await db.pool.connect();
+  try {
+    const result = await client.query('SELECT processor_name FROM processors WHERE id = $1', [processorId]);
+    if (result.rowCount === 0) {
+      throw new Error(`Processor with id ${processorId} not found`);
+    }
+    const processorName = result.rows[0].processor_name;
+    processorNameCache.set(processorId, processorName);
+    return processorName;
+  } finally {
+    client.release();
+  }
 };
 
 const getDlqTopicName = async (topicId) => {
-  const result = await db.query('SELECT topic_name FROM topics WHERE id = $1', [topicId]);
-  if (result.rowCount === 0) {
-    throw new Error(`DLQ topic with id ${topicId} not found`);
+  if (dlqTopicNameCache.has(topicId)) {
+    return dlqTopicNameCache.get(topicId);
   }
-  return result.rows[0].topic_name;
+  
+  const client = await db.pool.connect();
+  try {
+    const result = await client.query('SELECT topic_name FROM topics WHERE id = $1', [topicId]);
+    if (result.rowCount === 0) {
+      throw new Error(`DLQ topic with id ${topicId} not found`);
+    }
+    const topicName = result.rows[0].topic_name;
+    dlqTopicNameCache.set(topicId, topicName);
+    return topicName;
+  } finally {
+    client.release();
+  }
 };
 
 const applyTransformations = async (message, steps, dlqSteps) => {
@@ -112,9 +137,7 @@ const processBatch = async (messages, steps, dlqSteps, targetTopic, schemaId) =>
 
     console.log(`Produced DLQ message to ${dlqMessage.dlqTopicName}`);
   }
-
 };
-
 
 let messageCount = 0;
 
@@ -149,7 +172,6 @@ const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSche
     maxPollIntervalMs: 300000,
   });
   
-
   await consumer.connect();
   await producer.connect();
   await consumer.subscribe({ topic: sourceTopic, fromBeginning: true });
