@@ -73,51 +73,67 @@ const getDlqTopicName = async (topicId) => {
   }
 };
 
-const applyTransformations = async (message, steps, dlqSteps) => {
+const applyTransformationsParallel = async (message, steps, dlqSteps) => {
   let transformedMessage = { ...message };
-  for (let i = 0; i < steps.length; i++) {
-    const processorName = await getProcessorName(steps[i]);
+  
+  const applyTransformation = async (index) => {
+    const processorName = await getProcessorName(steps[index]);
     const transformation = require(`./transformations/${processorName}`);
     try {
-      transformedMessage = transformation(transformedMessage);
+      return transformation(transformedMessage);
     } catch (error) {
       console.error(`Error in transformation ${processorName}:`, error);
-      if (dlqSteps && dlqSteps[i]) {
-        const dlqTopicName = await getDlqTopicName(dlqSteps[i]);
-        return { dlqMessage: message, dlqTopicName };
+      if (dlqSteps && dlqSteps[index]) {
+        const dlqTopicName = await getDlqTopicName(dlqSteps[index]);
+        throw { dlqMessage: message, dlqTopicName };
       } else {
-        return { transformedMessage: null };
+        throw new Error(`Transformation ${processorName} failed`);
       }
     }
-  }
+  };
 
-  return { transformedMessage };
+  try {
+    const transformations = steps.map((_, index) => applyTransformation(index));
+    const results = await Promise.all(transformations);
+    transformedMessage = results[results.length - 1];
+    return { transformedMessage };
+  } catch (error) {
+    if (error.dlqMessage) {
+      return error;
+    }
+    return { transformedMessage: null };
+  }
+};
+
+const processMessage = async (message, steps, dlqSteps, schemaId) => {
+  try {
+    const decodedMessage = await registry.decode(message.value);
+    const { transformedMessage, dlqMessage, dlqTopicName } = await applyTransformationsParallel(decodedMessage, steps, dlqSteps);
+
+    if (dlqMessage) {
+      const encodedDlqValue = await registry.encode(schemaId, dlqMessage);
+      return { key: decodedMessage.key, value: encodedDlqValue, dlqTopicName };
+    }
+
+    if (!transformedMessage) {
+      return null;
+    }
+
+    const encodedValue = await registry.encode(schemaId, transformedMessage);
+    return { key: decodedMessage.key, value: encodedValue, dlqTopicName: null };
+  } catch (error) {
+    console.error(`Failed to process message with key ${message.key}:`, error);
+    return null;
+  }
 };
 
 const processBatch = async (messages, steps, dlqSteps, targetTopic, schemaId) => {
-  const transformedMessages = await Promise.all(
-    messages.map(async ({ key, value }) => {
-      try {
-        const decodedMessage = await registry.decode(value);
-        const { transformedMessage, dlqMessage, dlqTopicName } = await applyTransformations(decodedMessage, steps, dlqSteps);
+  const transformedMessages = [];
 
-        if (dlqMessage) {
-          const encodedDlqValue = await registry.encode(schemaId, dlqMessage);
-          return { key: decodedMessage.key, value: encodedDlqValue, dlqTopicName };
-        }
-
-        if (!transformedMessage) {
-          return null;
-        }
-
-        const encodedValue = await registry.encode(schemaId, transformedMessage);
-        return { key: decodedMessage.key, value: encodedValue, dlqTopicName: null };
-      } catch (error) {
-        console.error(`Failed to process message with key ${key}:`, error);
-        return null;
-      }
-    })
-  );
+  for (const message of messages) {
+    const result = await processMessage(message, steps, dlqSteps, schemaId);
+    transformedMessages.push(result);
+  }
 
   const validMessages = transformedMessages.filter(msg => msg !== null && !msg.dlqTopicName);
   const dlqMessages = transformedMessages.filter(msg => msg !== null && msg.dlqTopicName);
