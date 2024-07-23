@@ -2,7 +2,6 @@ const { Kafka } = require('kafkajs');
 const dotenv = require('dotenv').config();
 const { SchemaRegistry } = require('@kafkajs/confluent-schema-registry');
 const db = require('./db');
-const { messageProcessedCounter, messageProcessingDuration } = require('./metrics');
 
 const APIKEY = process.env.APIKEY;
 const APISECRET = process.env.APISECRET;
@@ -24,8 +23,6 @@ const kafka = new Kafka({
   }
 });
 
-console.log('Kafka client initialized');
-
 const producer = kafka.producer();
 const registry = new SchemaRegistry({
   host: REGISTRY_URL,
@@ -34,8 +31,6 @@ const registry = new SchemaRegistry({
     password: REGISTRY_APISECRET
   }
 });
-
-console.log('Kafka producer and Schema Registry initialized');
 
 const getProcessorName = async (processorId) => {
   const result = await db.query('SELECT processor_name FROM processors WHERE id = $1', [processorId]);
@@ -56,24 +51,21 @@ const getDlqTopicName = async (topicId) => {
 const applyTransformations = async (message, steps, dlqSteps) => {
   let transformedMessage = { ...message };
   for (let i = 0; i < steps.length; i++) {
-    const end = messageProcessingDuration.startTimer({ step: steps[i], pipeline_id: PIPELINE_ID, pod_name: POD_NAME });
     const processorName = await getProcessorName(steps[i]);
     const transformation = require(`./transformations/${processorName}`);
-    transformedMessage = transformation(transformedMessage);
-    end();
-
-    if (!transformedMessage) {
+    try {
+      transformedMessage = transformation(transformedMessage);
+    } catch (error) {
+      console.error(`Error in transformation ${processorName}:`, error);
       if (dlqSteps && dlqSteps[i]) {
         const dlqTopicName = await getDlqTopicName(dlqSteps[i]);
-        messageProcessedCounter.inc({ status: 'error', pipeline_id: PIPELINE_ID, pod_name: POD_NAME });
         return { dlqMessage: message, dlqTopicName };
       } else {
-        messageProcessedCounter.inc({ status: 'error', pipeline_id: PIPELINE_ID, pod_name: POD_NAME });
         return { transformedMessage: null };
       }
     }
   }
-  messageProcessedCounter.inc({ status: 'success', pipeline_id: PIPELINE_ID, pod_name: POD_NAME });
+
   return { transformedMessage };
 };
 
@@ -110,8 +102,6 @@ const processBatch = async (messages, steps, dlqSteps, targetTopic, schemaId) =>
       topic: targetTopic,
       messages: validMessages.map(({ key, value }) => ({ key, value })),
     });
-
-    console.log(`Produced ${validMessages.length} transformed messages`);
   }
 
   for (const dlqMessage of dlqMessages) {
@@ -122,7 +112,23 @@ const processBatch = async (messages, steps, dlqSteps, targetTopic, schemaId) =>
 
     console.log(`Produced DLQ message to ${dlqMessage.dlqTopicName}`);
   }
+
 };
+
+
+let messageCount = 0;
+
+setInterval(() => {
+  const startTime = Date.now();
+  const countAtStart = messageCount;
+
+  setTimeout(() => {
+    const elapsedTime = (Date.now() - startTime) / 1000;
+    const newMessages = messageCount - countAtStart;
+    const throughput = newMessages / elapsedTime;
+    console.log(`Throughput: ${throughput.toFixed(2)} messages/second`);
+  }, 10000);
+}, 10000);
 
 const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSchema) => {
   const pipelineId = process.env.PIPELINE_ID;
@@ -132,12 +138,18 @@ const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSche
 
   console.log(`Running consumer for pipeline ${pipelineId} with:`, { sourceTopic, targetTopic, steps, incomingSchema, outgoingSchema });
 
-  const consumer = kafka.consumer({ 
+  const consumer = kafka.consumer({
     groupId: `pipeline-${pipelineId}-${sourceTopic}-group`,
     sessionTimeout: 30000,
     heartbeatInterval: 3000,
+    maxPartitionFetchBytes: 10485760,
+    fetchMaxBytes: 52428800,
+    fetchMinBytes: 1,
+    maxPollRecords: 10000,
+    maxPollIntervalMs: 300000,
   });
   
+
   await consumer.connect();
   await producer.connect();
   await consumer.subscribe({ topic: sourceTopic, fromBeginning: true });
@@ -151,12 +163,11 @@ const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSche
     return;
   }
 
-  const batchSize = 500;
+  const batchSize = 1000;
 
   await consumer.run({
     eachBatchAutoResolve: false,
     eachBatch: async ({ batch, resolveOffset, heartbeat, commitOffsetsIfNecessary }) => {
-      console.log(`Received batch with ${batch.messages.length} messages`);
       let messages = [];
 
       for (let message of batch.messages) {
@@ -167,6 +178,7 @@ const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSche
 
         if (messages.length >= batchSize) {
           await processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
+          messageCount += messages.length;
           messages = [];
         }
 
@@ -176,6 +188,7 @@ const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSche
 
       if (messages.length > 0) {
         await processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
+        messageCount += messages.length;
       }
 
       await commitOffsetsIfNecessary();

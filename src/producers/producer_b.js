@@ -48,7 +48,7 @@ const run = async () => {
 
   const produceMessages = async (batchNumber) => {
     const messages = [];
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 15000; i++) {
       const key = `key-${batchNumber}-${i}`;
       const value = `value-${batchNumber}-${i}`;
       const num = batchNumber * 100 + i;
@@ -62,12 +62,6 @@ const run = async () => {
       topic: "source_b",
       messages: messages,
     });
-    messageCounter
-      .labels("producer", "source_b", "produced")
-      .inc(messages.length);
-    console.log(
-      `Produced batch ${batchNumber} with ${messages.length} messages`
-    );
 
     console.log(
       `Produced batch ${batchNumber} with ${messages.length} messages`
@@ -77,7 +71,7 @@ const run = async () => {
   let batchNumber = 0;
   while (true) {
     await produceMessages(batchNumber++);
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
 };
 
