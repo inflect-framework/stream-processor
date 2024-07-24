@@ -2,7 +2,6 @@ const { Kafka } = require('kafkajs');
 const dotenv = require('dotenv').config();
 const { SchemaRegistry } = require('@kafkajs/confluent-schema-registry');
 const db = require('./db');
-const { messageProcessedCounter, messageProcessingDuration } = require('./metrics');
 
 const APIKEY = process.env.APIKEY;
 const APISECRET = process.env.APISECRET;
@@ -14,7 +13,7 @@ const PIPELINE_ID = process.env.PIPELINE_ID;
 const POD_NAME = process.env.HOSTNAME || 'unknown-pod';
 
 const kafka = new Kafka({
-  clientId: 'my-consumer',
+  clientId: `consumer-${POD_NAME}`,
   brokers: [BROKER],
   ssl: true,
   sasl: {
@@ -23,8 +22,6 @@ const kafka = new Kafka({
     password: APISECRET
   }
 });
-
-console.log('Kafka client initialized');
 
 const producer = kafka.producer();
 const registry = new SchemaRegistry({
@@ -35,83 +32,111 @@ const registry = new SchemaRegistry({
   }
 });
 
-console.log('Kafka producer and Schema Registry initialized');
+const processorNameCache = new Map();
+const dlqTopicNameCache = new Map();
+const schemaCache = new Map();
 
 const getProcessorName = async (processorId) => {
-  const result = await db.query('SELECT processor_name FROM processors WHERE id = $1', [processorId]);
-  if (result.rowCount === 0) {
-    throw new Error(`Processor with id ${processorId} not found`);
+  if (processorNameCache.has(processorId)) {
+    return processorNameCache.get(processorId);
   }
-  return result.rows[0].processor_name;
+  
+  const client = await db.pool.connect();
+  try {
+    const result = await client.query('SELECT processor_name FROM processors WHERE id = $1', [processorId]);
+    if (result.rowCount === 0) {
+      throw new Error(`Processor with id ${processorId} not found`);
+    }
+    const processorName = result.rows[0].processor_name;
+    processorNameCache.set(processorId, processorName);
+    return processorName;
+  } finally {
+    client.release();
+  }
 };
 
 const getDlqTopicName = async (topicId) => {
-  const result = await db.query('SELECT topic_name FROM topics WHERE id = $1', [topicId]);
-  if (result.rowCount === 0) {
-    throw new Error(`DLQ topic with id ${topicId} not found`);
+  if (dlqTopicNameCache.has(topicId)) {
+    return dlqTopicNameCache.get(topicId);
   }
-  return result.rows[0].topic_name;
+  
+  const client = await db.pool.connect();
+  try {
+    const result = await client.query('SELECT topic_name FROM topics WHERE id = $1', [topicId]);
+    if (result.rowCount === 0) {
+      throw new Error(`DLQ topic with id ${topicId} not found`);
+    }
+    const topicName = result.rows[0].topic_name;
+    dlqTopicNameCache.set(topicId, topicName);
+    return topicName;
+  } finally {
+    client.release();
+  }
 };
 
-const applyTransformations = async (message, steps, dlqSteps) => {
+const applyTransformationsAsync = async (message, steps, dlqSteps) => {
   let transformedMessage = { ...message };
+  
   for (let i = 0; i < steps.length; i++) {
-    const end = messageProcessingDuration.startTimer({ step: steps[i], pipeline_id: PIPELINE_ID, pod_name: POD_NAME });
     const processorName = await getProcessorName(steps[i]);
     const transformation = require(`./transformations/${processorName}`);
-    transformedMessage = transformation(transformedMessage);
-    end();
-
-    if (!transformedMessage) {
+    try {
+      transformedMessage = await transformation(transformedMessage);
+    } catch (error) {
+      console.error(`Error in transformation ${processorName}:`, error);
       if (dlqSteps && dlqSteps[i]) {
         const dlqTopicName = await getDlqTopicName(dlqSteps[i]);
-        messageProcessedCounter.inc({ status: 'error', pipeline_id: PIPELINE_ID, pod_name: POD_NAME });
         return { dlqMessage: message, dlqTopicName };
       } else {
-        messageProcessedCounter.inc({ status: 'error', pipeline_id: PIPELINE_ID, pod_name: POD_NAME });
-        return { transformedMessage: null };
+        throw new Error(`Transformation ${processorName} failed`);
       }
     }
   }
-  messageProcessedCounter.inc({ status: 'success', pipeline_id: PIPELINE_ID, pod_name: POD_NAME });
+
   return { transformedMessage };
 };
 
+const processMessage = async (message, steps, dlqSteps, schemaId) => {
+  try {
+    let decodedMessage;
+    if (schemaCache.has(schemaId)) {
+      decodedMessage = await registry.decode(message.value, schemaCache.get(schemaId));
+    } else {
+      const schema = await registry.getSchema(schemaId);
+      schemaCache.set(schemaId, schema);
+      decodedMessage = await registry.decode(message.value, schema);
+    }
+
+    const { transformedMessage, dlqMessage, dlqTopicName } = await applyTransformationsAsync(decodedMessage, steps, dlqSteps);
+
+    if (dlqMessage) {
+      const encodedDlqValue = await registry.encode(schemaId, dlqMessage);
+      return { key: decodedMessage.key, value: encodedDlqValue, dlqTopicName };
+    }
+
+    if (!transformedMessage) {
+      return null;
+    }
+
+    const encodedValue = await registry.encode(schemaId, transformedMessage);
+    return { key: decodedMessage.key, value: encodedValue, dlqTopicName: null };
+  } catch (error) {
+    console.error(`Failed to process message with key ${message.key}:`, error);
+    return null;
+  }
+};
+
 const processBatch = async (messages, steps, dlqSteps, targetTopic, schemaId) => {
-  const transformedMessages = await Promise.all(
-    messages.map(async ({ key, value }) => {
-      try {
-        const decodedMessage = await registry.decode(value);
-        const { transformedMessage, dlqMessage, dlqTopicName } = await applyTransformations(decodedMessage, steps, dlqSteps);
+  const results = await Promise.all(messages.map(message => processMessage(message, steps, dlqSteps, schemaId)));
 
-        if (dlqMessage) {
-          const encodedDlqValue = await registry.encode(schemaId, dlqMessage);
-          return { key: decodedMessage.key, value: encodedDlqValue, dlqTopicName };
-        }
-
-        if (!transformedMessage) {
-          return null;
-        }
-
-        const encodedValue = await registry.encode(schemaId, transformedMessage);
-        return { key: decodedMessage.key, value: encodedValue, dlqTopicName: null };
-      } catch (error) {
-        console.error(`Failed to process message with key ${key}:`, error);
-        return null;
-      }
-    })
-  );
-
-  const validMessages = transformedMessages.filter(msg => msg !== null && !msg.dlqTopicName);
-  const dlqMessages = transformedMessages.filter(msg => msg !== null && msg.dlqTopicName);
+  const validMessages = results.filter(msg => msg !== null && !msg.dlqTopicName);
+  const dlqMessages = results.filter(msg => msg !== null && msg.dlqTopicName);
 
   if (validMessages.length > 0) {
     await producer.send({
       topic: targetTopic,
       messages: validMessages.map(({ key, value }) => ({ key, value })),
     });
-
-    console.log(`Produced ${validMessages.length} transformed messages`);
   }
 
   for (const dlqMessage of dlqMessages) {
@@ -119,23 +144,41 @@ const processBatch = async (messages, steps, dlqSteps, targetTopic, schemaId) =>
       topic: dlqMessage.dlqTopicName,
       messages: [{ key: dlqMessage.key, value: dlqMessage.value }],
     });
-
     console.log(`Produced DLQ message to ${dlqMessage.dlqTopicName}`);
   }
+
+  return results.length;
 };
 
+let messageCount = 0;
+
+setInterval(() => {
+  const startTime = Date.now();
+  const countAtStart = messageCount;
+
+  setTimeout(() => {
+    const elapsedTime = (Date.now() - startTime) / 1000;
+    const newMessages = messageCount - countAtStart;
+    const throughput = newMessages / elapsedTime;
+    console.log(`Throughput: ${throughput.toFixed(2)} messages/second`);
+  }, 10000);
+}, 10000);
+
 const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSchema) => {
-  const pipelineId = process.env.PIPELINE_ID;
-  if (!pipelineId) {
+  if (!PIPELINE_ID) {
     throw new Error('PIPELINE_ID environment variable is not set');
   }
 
-  console.log(`Running consumer for pipeline ${pipelineId} with:`, { sourceTopic, targetTopic, steps, incomingSchema, outgoingSchema });
+  console.log(`Running consumer for pipeline ${PIPELINE_ID} with:`, { sourceTopic, targetTopic, steps, incomingSchema, outgoingSchema });
 
-  const consumer = kafka.consumer({ 
-    groupId: `pipeline-${pipelineId}-${sourceTopic}-group`,
+  const consumer = kafka.consumer({
+    groupId: `pipeline-${PIPELINE_ID}-${sourceTopic}-group`,
     sessionTimeout: 30000,
     heartbeatInterval: 3000,
+    maxPartitionFetchBytes: 10485760,
+    fetchMaxBytes: 52428800,
+    fetchMinBytes: 1,
+    maxPollIntervalMs: 300000,
   });
   
   await consumer.connect();
@@ -151,34 +194,40 @@ const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSche
     return;
   }
 
-  const batchSize = 500;
+  const batchSize = 5000;
 
   await consumer.run({
     eachBatchAutoResolve: false,
-    eachBatch: async ({ batch, resolveOffset, heartbeat, commitOffsetsIfNecessary }) => {
-      console.log(`Received batch with ${batch.messages.length} messages`);
+    eachBatch: async ({ batch, resolveOffset, heartbeat, commitOffsetsIfNecessary, isRunning, isStale }) => {
       let messages = [];
+      let lastOffset;
 
       for (let message of batch.messages) {
+        if (!isRunning() || isStale()) break;
+
         messages.push({
           key: message.key ? message.key.toString() : null,
           value: message.value,
         });
 
+        lastOffset = message.offset;
+
         if (messages.length >= batchSize) {
-          await processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
+          const processedCount = await processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
+          messageCount += processedCount;
           messages = [];
+          await commitOffsetsIfNecessary();
         }
 
-        resolveOffset(message.offset);
         await heartbeat();
       }
 
       if (messages.length > 0) {
-        await processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
+        const processedCount = await processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
+        messageCount += processedCount;
       }
 
-      await commitOffsetsIfNecessary();
+      resolveOffset(lastOffset);
     },
   });
 
