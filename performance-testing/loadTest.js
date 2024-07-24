@@ -6,15 +6,14 @@ const {
 } = require("@kafkajs/confluent-schema-registry");
 const { messageCounter } = require("../src/metrics");
 
-// Configuration options
 const CONFIG = {
   eventsPerBatch: 25000,
-  delayBetweenBatches: 200, // milliseconds
-  totalEvents: 0, // set to 0 for infinite
+  delayBetweenBatches: 200,
+  totalEvents: 0,
   numberOfProducers: 4,
-  rampUpDelay: 10000, // milliseconds between starting each producer
+  rampUpDelay: 10000,
   maxRetries: 5,
-  initialRetryTime: 100, // milliseconds
+  initialRetryTime: 100,
 };
 
 const APIKEY = process.env.APIKEY;

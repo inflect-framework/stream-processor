@@ -194,7 +194,7 @@ const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSche
     return;
   }
 
-  const batchSize = 5000; // Increased batch size
+  const batchSize = 5000;
 
   await consumer.run({
     eachBatchAutoResolve: false,
