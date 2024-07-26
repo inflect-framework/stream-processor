@@ -1,0 +1,24 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: kafka-scaledobject-{{PIPELINE_ID}}
+  namespace: inflect
+spec:
+  scaleTargetRef:
+    name: pipeline-{{PIPELINE_ID}}
+  pollingInterval: 15
+  cooldownPeriod: 30
+  maxReplicaCount: 10
+  minReplicaCount: 1 
+  triggers:
+  - type: kafka
+    metadata:
+      bootstrapServers: pkc-921jm.us-east-2.aws.confluent.cloud:9092
+      consumerGroup: pipeline-{{PIPELINE_ID}}-source_a-group
+      topic: source_a
+      lagThreshold: "10"
+      offsetResetPolicy: latest
+      allowIdleConsumers: "true"
+      scaleToZeroOnInvalidOffset: "false"
+    authenticationRef:
+      name: kafka-trigger-auth-{{PIPELINE_ID}}

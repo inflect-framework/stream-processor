@@ -4,7 +4,7 @@ metadata:
   name: pipeline-{{PIPELINE_ID}}
   namespace: inflect
 spec:
-  replicas: 3
+  replicas: 1
   selector:
     matchLabels:
       app: pipeline-{{PIPELINE_ID}}
@@ -69,6 +69,17 @@ spec:
             configMapKeyRef:
               name: kafka-config
               key: registry-url
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "pkc-921jm.us-east-2.aws.confluent.cloud:9092"
+        - name: KAFKA_SECURITY_PROTOCOL
+          value: "SASL_SSL"
+        - name: KAFKA_SASL_MECHANISM
+          value: "PLAIN"
+        - name: KAFKA_SASL_JAAS_CONFIG
+          valueFrom:
+            secretKeyRef:
+              name: kafka-secrets
+              key: sasl-jaas-config
         ports:
         - containerPort: 3000
           name: metrics
