@@ -1,0 +1,19 @@
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: kafka-trigger-auth-{{PIPELINE_ID}}
+  namespace: inflect
+spec:
+  secretTargetRef:
+  - parameter: sasl
+    name: kafka-secrets
+    key: sasl
+  - parameter: username
+    name: kafka-secrets
+    key: apikey
+  - parameter: password
+    name: kafka-secrets
+    key: apisecret
+  - parameter: tls
+    name: kafka-secrets
+    key: tls
