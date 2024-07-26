@@ -104,7 +104,7 @@ deploy_prometheus() {
 
     # Wait for resources to be fully removed
     echo "Waiting for Prometheus resources to be fully removed..."
-    sleep 30
+    sleep 15
 
     # Install Prometheus
     helm install prometheus prometheus-community/kube-prometheus-stack \
@@ -121,6 +121,22 @@ deploy_prometheus() {
     echo "Prometheus deployed successfully."
 }
 
+# Function to install KEDA
+install_or_upgrade_keda() {
+    echo "Checking KEDA installation..."
+    if kubectl get namespace keda >/dev/null 2>&1; then
+        echo "KEDA is already installed. Upgrading..."
+        helm repo add kedacore https://kedacore.github.io/charts
+        helm repo update
+        helm upgrade keda kedacore/keda --namespace keda
+    else
+        echo "Installing KEDA..."
+        helm repo add kedacore https://kedacore.github.io/charts
+        helm repo update
+        helm install keda kedacore/keda --namespace keda --create-namespace
+    fi
+}
+
 # Create namespace if it doesn't exist
 kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
 
@@ -131,7 +147,10 @@ kubectl create secret generic kafka-secrets -n $NAMESPACE \
   --from-literal=apisecret=$APISECRET \
   --from-literal=registry-apikey=$REGISTRY_APIKEY \
   --from-literal=registry-apisecret=$REGISTRY_APISECRET \
+  --from-literal=sasl="plaintext" \
+  --from-literal=tls="enable" \
   --dry-run=client -o yaml | kubectl apply -f -
+
 
 # Create kafka-config
 echo "Creating kafka-config..."
@@ -218,7 +237,7 @@ echo "Waiting for PostgreSQL pod to be ready..."
 kubectl wait --for=condition=ready pod -l app=postgres -n $NAMESPACE --timeout=300s
 
 echo "Waiting for PostgreSQL to be fully operational..."
-sleep 30
+sleep 15
 
 # Get the pod name
 PG_POD=$(kubectl get pods -n $NAMESPACE -l app=postgres -o jsonpath="{.items[0].metadata.name}")
@@ -238,6 +257,9 @@ echo "PostgreSQL deployed and initialized with the provided dump."
 # Deploy Prometheus
 deploy_prometheus
 
+# Install KEDA
+install_or_upgrade_keda
+
 # Now proceed with pipeline deployment
 PIPELINES=$(kubectl exec -n $NAMESPACE $PG_POD -- psql -U $DB_USER -d $DB_NAME -t -c "SELECT id FROM pipelines WHERE is_active = true")
 
@@ -254,13 +276,8 @@ do
   
   echo "Processing pipeline $PIPELINE_ID"
   
-  # Set default replicas to 3 since pipeline_scaling table doesn't exist
-  REPLICAS=3
-  
-  echo "Number of replicas for pipeline $PIPELINE_ID: $REPLICAS"
-  
-  # Replace placeholders and create temporary deployment file
-  sed "s/{{PIPELINE_ID}}/$PIPELINE_ID/g; s/replicas: 3/replicas: $REPLICAS/g" configs/pipeline-deployment-template.yaml > deployments/pipeline-$PIPELINE_ID-deployment.yaml
+  # Replace placeholders in the deployment template
+  sed "s/{{PIPELINE_ID}}/$PIPELINE_ID/g" configs/pipeline-deployment-template.yaml > deployments/pipeline-$PIPELINE_ID-deployment.yaml
   
   echo "Created deployment file for pipeline $PIPELINE_ID"
   
@@ -275,7 +292,69 @@ do
   sed "s/{{PIPELINE_ID}}/$PIPELINE_ID/g" configs/templates/servicemonitor-template.yaml > deployments/pipeline-$PIPELINE_ID-servicemonitor.yaml
   kubectl apply -f deployments/pipeline-$PIPELINE_ID-servicemonitor.yaml
   
-  echo "Deployed pipeline $PIPELINE_ID with $REPLICAS replicas and monitoring"
-done
+# Query the database for the source topic name
+SOURCE_TOPIC=$(kubectl exec -n $NAMESPACE $PG_POD -- psql -U $DB_USER -d $DB_NAME -t -c "SELECT t.topic_name FROM pipelines p JOIN topics t ON p.source_topic_id = t.id WHERE p.id = $PIPELINE_ID")
+SOURCE_TOPIC=$(echo $SOURCE_TOPIC | xargs)  # Trim whitespace
+
+# If SOURCE_TOPIC is empty, use a default value or exit with an error
+if [ -z "$SOURCE_TOPIC" ]; then
+    echo "Error: No source topic found for pipeline $PIPELINE_ID"
+    exit 1
+fi
+
+cat <<EOF > deployments/pipeline-$PIPELINE_ID-scaledobject.yaml
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: kafka-scaledobject-$PIPELINE_ID
+  namespace: inflect
+spec:
+  scaleTargetRef:
+    name: pipeline-$PIPELINE_ID
+    kind: Deployment
+  pollingInterval: 15
+  cooldownPeriod: 300
+  minReplicaCount: 1
+  maxReplicaCount: 50
+  triggers:
+  - type: kafka
+    metadata:
+      bootstrapServers: $BROKER
+      consumerGroup: pipeline-$PIPELINE_ID
+      topic: $SOURCE_TOPIC
+      lagThreshold: "10"
+      offsetResetPolicy: latest
+    authenticationRef:
+      name: kafka-trigger-auth-$PIPELINE_ID
+EOF
+
+kubectl apply -f deployments/pipeline-$PIPELINE_ID-scaledobject.yaml
+
+# Create and apply TriggerAuthentication
+cat <<EOF > deployments/pipeline-$PIPELINE_ID-triggerauth.yaml
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: kafka-trigger-auth-$PIPELINE_ID
+  namespace: inflect
+spec:
+  secretTargetRef:
+  - parameter: sasl
+    name: kafka-secrets
+    key: sasl
+  - parameter: username
+    name: kafka-secrets
+    key: apikey
+  - parameter: password
+    name: kafka-secrets
+    key: apisecret
+  - parameter: tls
+    name: kafka-secrets
+    key: tls
+EOF
+
+kubectl apply -f deployments/pipeline-$PIPELINE_ID-triggerauth.yaml
+
+echo "Deployed pipeline $PIPELINE_ID with KEDA autoscaling using source topic: $SOURCE_TOPIC"
 
 echo "Deployment process completed."
