@@ -1,0 +1,14 @@
+{
+  "name": "partition-scaler",
+  "version": "1.0.0",
+  "description": "Kafka partition scaler for Kubernetes",
+  "main": "src/partition-scaler.js",
+  "scripts": {
+    "start": "node src/partition-scaler.js"
+  },
+  "dependencies": {
+    "@kubernetes/client-node": "^0.18.1",
+    "kafkajs": "^2.2.4",
+    "dotenv": "^16.4.5"
+  }
+}

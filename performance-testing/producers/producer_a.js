@@ -4,7 +4,7 @@ const {
   SchemaRegistry,
   SchemaType,
 } = require("@kafkajs/confluent-schema-registry");
-const { messageCounter } = require("../metrics");
+const { messageCounter } = require("../../src/metrics");
 
 const APIKEY = process.env.APIKEY;
 const APISECRET = process.env.APISECRET;

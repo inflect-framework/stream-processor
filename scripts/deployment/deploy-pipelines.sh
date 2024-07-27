@@ -302,68 +302,6 @@ if [ -z "$SOURCE_TOPIC" ]; then
     exit 1
 fi
 
-# cat <<EOF > deployments/pipeline-$PIPELINE_ID-scaledobject.yaml
-# apiVersion: keda.sh/v1alpha1
-# kind: ScaledObject
-# metadata:
-#   name: kafka-scaledobject-{{PIPELINE_ID}}
-#   namespace: inflect
-# spec:
-#   scaleTargetRef:
-#     name: pipeline-{{PIPELINE_ID}}
-#   pollingInterval: 15
-#   cooldownPeriod: 30
-#   maxReplicaCount: 10
-#   triggers:
-#   - type: kafka
-#     metadata:
-#       bootstrapServers: pkc-921jm.us-east-2.aws.confluent.cloud:9092
-#       consumerGroup: pipeline-{{PIPELINE_ID}}-source_a-group
-#       topic: source_a
-#       lagThreshold: "10"
-#       offsetResetPolicy: latest
-#       allowIdleConsumers: "true"
-#       scaleToZeroOnInvalidOffset: "false"
-#     authenticationRef:
-#       name: kafka-trigger-auth-{{PIPELINE_ID}}
-# EOF
-
-# # Replace placeholders in the ScaledObject template
-# sed "s/{{PIPELINE_ID}}/$PIPELINE_ID/g" configs/templates/scaledobject-template.yaml > deployments/pipeline-$PIPELINE_ID-scaledobject.yaml
-
-# # Apply the ScaledObject
-# kubectl apply -f deployments/pipeline-$PIPELINE_ID-scaledobject.yaml
-
-
-# # Create and apply TriggerAuthentication
-# cat <<EOF > deployments/pipeline-$PIPELINE_ID-triggerauth.yaml
-# apiVersion: keda.sh/v1alpha1
-# kind: TriggerAuthentication
-# metadata:
-#   name: kafka-trigger-auth-{{PIPELINE_ID}}
-#   namespace: inflect
-# spec:
-#   secretTargetRef:
-#   - parameter: sasl
-#     name: kafka-secrets
-#     key: sasl
-#   - parameter: username
-#     name: kafka-secrets
-#     key: apikey
-#   - parameter: password
-#     name: kafka-secrets
-#     key: apisecret
-#   - parameter: tls
-#     name: kafka-secrets
-#     key: tls
-# EOF
-
-# # Replace placeholders in the TriggerAuthentication template
-# sed "s/{{PIPELINE_ID}}/$PIPELINE_ID/g" configs/templates/triggerauthentication-template.yaml > deployments/pipeline-$PIPELINE_ID-triggerauth.yaml
-
-# # Apply the TriggerAuthentication
-# kubectl apply -f deployments/pipeline-$PIPELINE_ID-triggerauth.yaml
-
   # Apply ScaledObject
   sed "s/{{PIPELINE_ID}}/$PIPELINE_ID/g" configs/templates/scaledobject-template.yaml > deployments/pipeline-$PIPELINE_ID-scaledobject.yaml
   kubectl apply -f deployments/pipeline-$PIPELINE_ID-scaledobject.yaml
@@ -371,7 +309,7 @@ fi
   # Apply TriggerAuthentication
   sed "s/{{PIPELINE_ID}}/$PIPELINE_ID/g" configs/templates/triggerauthentication-template.yaml > deployments/pipeline-$PIPELINE_ID-triggerauth.yaml
   kubectl apply -f deployments/pipeline-$PIPELINE_ID-triggerauth.yaml
-  
+
 echo "Deployed pipeline $PIPELINE_ID with KEDA autoscaling using source topic: $SOURCE_TOPIC"
 done
 
