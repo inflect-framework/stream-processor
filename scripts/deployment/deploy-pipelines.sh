@@ -46,6 +46,13 @@ eval $(minikube docker-env)
 echo "Building Docker image..."
 docker build -t inflect:latest .
 
+
+eval $(minikube docker-env)
+
+# Build the partition-scaler Docker image
+echo "Building partition-scaler Docker image..."
+docker build -t partition-scaler:latest -f partition-scaler/Dockerfile .
+
 # Check Kubernetes context
 echo "Current Kubernetes context: $(kubectl config current-context)"
 read -p "Is this the correct context? (y/n) " -n 1 -r
@@ -73,8 +80,8 @@ NAMESPACE="inflect"
 PG_DEPLOYMENT_NAME="inflect-postgres"
 PG_SERVICE_NAME="inflect-postgres-service"
 PG_SECRET_NAME="inflect-postgres-secrets"
-PG_STORAGE_CLASS="standard"  # adjust as needed
-PG_STORAGE_SIZE="5Gi"        # adjust as needed
+PG_STORAGE_CLASS="standard"
+PG_STORAGE_SIZE="5Gi"
 
 # Function to deploy Prometheus
 deploy_prometheus() {
@@ -312,5 +319,91 @@ fi
 
 echo "Deployed pipeline $PIPELINE_ID with KEDA autoscaling using source topic: $SOURCE_TOPIC"
 done
+
+echo "Updating kafka-secrets..."
+kubectl create secret generic kafka-scripts -n $NAMESPACE \
+  --from-literal=apikey=$APIKEY \
+  --from-literal=apisecret=$APISECRET \
+  --from-literal=registry-apikey=$REGISTRY_APIKEY \
+  --from-literal=registry-apisecret=$REGISTRY_APISECRET \
+  --from-literal=sasl="plaintext" \
+  --from-literal=tls="enable" \
+  --from-literal=sasl-jaas-config="org.apache.kafka.common.security.plain.PlainLoginModule required username=\"$APIKEY\" password=\"$APISECRET\";" \
+  --from-literal=bootstrap-servers="$BROKER" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# Create ServiceAccount for partition-scaler
+kubectl create serviceaccount partition-scaler-sa -n $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+
+# Create Role for partition-scaler
+cat <<EOF | kubectl apply -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: $NAMESPACE
+  name: partition-scaler-role
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+EOF
+
+# Create RoleBinding for partition-scaler
+kubectl create rolebinding partition-scaler-rolebinding \
+  --role=partition-scaler-role \
+  --serviceaccount=$NAMESPACE:partition-scaler-sa \
+  -n $NAMESPACE \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# Deploy partition-scaler
+echo "Deploying partition-scaler..."
+cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: partition-scaler
+  namespace: $NAMESPACE
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: partition-scaler
+  template:
+    metadata:
+      labels:
+        app: partition-scaler
+    spec:
+      serviceAccountName: partition-scaler-sa
+      containers:
+      - name: partition-scaler
+        image: partition-scaler:latest
+        imagePullPolicy: Never
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "$BROKER"
+        - name: KAFKA_SASL_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: kafka-secrets
+              key: apikey
+        - name: KAFKA_SASL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: kafka-secrets
+              key: apisecret
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+EOF
+
+# Wait for partition-scaler deployment to be ready
+echo "Waiting for partition-scaler deployment to be ready..."
+kubectl rollout status deployment/partition-scaler -n $NAMESPACE
+
+echo "Partition-scaler deployed successfully."
 
 echo "Deployment process completed."
