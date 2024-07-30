@@ -2,6 +2,15 @@ const { Kafka } = require('kafkajs');
 const dotenv = require('dotenv').config();
 const { SchemaRegistry } = require('@kafkajs/confluent-schema-registry');
 const db = require('./db');
+const { 
+  messagesReceivedCounter, 
+  processorsAppliedCounter,
+  messagesCompletedCounter,
+  messagesErrorCounter, 
+  messagesDlqCounter, 
+  messagesDroppedCounter,
+  messageProcessingDuration 
+} = require('./metrics');
 
 const APIKEY = process.env.APIKEY;
 const APISECRET = process.env.APISECRET;
@@ -80,8 +89,10 @@ const applyTransformationsAsync = async (message, steps, dlqSteps) => {
   for (let i = 0; i < steps.length; i++) {
     const processorName = await getProcessorName(steps[i]);
     const transformation = require(`./transformations/${processorName}`);
+    const start = process.hrtime();
     try {
       transformedMessage = await transformation(transformedMessage);
+      processorsAppliedCounter.inc({ pipeline_id: PIPELINE_ID, pod_name: POD_NAME, processor_name: processorName });
     } catch (error) {
       console.error(`Error in transformation ${processorName}:`, error);
       if (dlqSteps && dlqSteps[i]) {
@@ -90,6 +101,10 @@ const applyTransformationsAsync = async (message, steps, dlqSteps) => {
       } else {
         throw new Error(`Transformation ${processorName} failed`);
       }
+    } finally {
+      const end = process.hrtime(start);
+      const duration = end[0] + end[1] / 1e9;
+      messageProcessingDuration.observe({ pipeline_id: PIPELINE_ID, pod_name: POD_NAME, step: processorName }, duration);
     }
   }
 
@@ -97,6 +112,7 @@ const applyTransformationsAsync = async (message, steps, dlqSteps) => {
 };
 
 const processMessage = async (message, steps, dlqSteps, schemaId) => {
+  const start = process.hrtime();
   try {
     let decodedMessage;
     if (schemaCache.has(schemaId)) {
@@ -110,19 +126,27 @@ const processMessage = async (message, steps, dlqSteps, schemaId) => {
     const { transformedMessage, dlqMessage, dlqTopicName } = await applyTransformationsAsync(decodedMessage, steps, dlqSteps);
 
     if (dlqMessage) {
+      messagesDlqCounter.inc({ pipeline_id: PIPELINE_ID, pod_name: POD_NAME });
       const encodedDlqValue = await registry.encode(schemaId, dlqMessage);
       return { key: decodedMessage.key, value: encodedDlqValue, dlqTopicName };
     }
 
     if (!transformedMessage) {
+      messagesDroppedCounter.inc({ pipeline_id: PIPELINE_ID, pod_name: POD_NAME });
       return null;
     }
 
     const encodedValue = await registry.encode(schemaId, transformedMessage);
+    messagesCompletedCounter.inc({ pipeline_id: PIPELINE_ID, pod_name: POD_NAME });
     return { key: decodedMessage.key, value: encodedValue, dlqTopicName: null };
   } catch (error) {
+    messagesErrorCounter.inc({ pipeline_id: PIPELINE_ID, pod_name: POD_NAME });
     console.error(`Failed to process message with key ${message.key}:`, error);
     return null;
+  } finally {
+    const end = process.hrtime(start);
+    const duration = end[0] + end[1] / 1e9;
+    messageProcessingDuration.observe({ pipeline_id: PIPELINE_ID, pod_name: POD_NAME, step: 'total' }, duration);
   }
 };
 
@@ -213,8 +237,8 @@ const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSche
         lastOffset = message.offset;
 
         if (messages.length >= batchSize) {
-          const processedCount = await processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
-          messageCount += processedCount;
+          messagesReceivedCounter.inc({ pipeline_id: PIPELINE_ID, pod_name: POD_NAME }, messages.length);
+          await processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
           messages = [];
           await commitOffsetsIfNecessary();
         }
@@ -223,8 +247,8 @@ const run = async (sourceTopic, targetTopic, steps, incomingSchema, outgoingSche
       }
 
       if (messages.length > 0) {
-        const processedCount = await processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
-        messageCount += processedCount;
+        messagesReceivedCounter.inc({ pipeline_id: PIPELINE_ID, pod_name: POD_NAME }, messages.length);
+        await processBatch(messages, steps.processors, steps.dlq, targetTopic, outgoingSchemaId);
       }
 
       resolveOffset(lastOffset);

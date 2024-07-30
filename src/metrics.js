@@ -2,12 +2,47 @@ const promClient = require('prom-client');
 
 const register = new promClient.Registry();
 
-const messageProcessedCounter = new promClient.Counter({
-  name: 'message_processed_total',
-  help: 'Total number of messages processed',
-  labelNames: ['pipeline_id', 'pod_name', 'status']
+const messagesReceivedCounter = new promClient.Counter({
+  name: 'messages_received_total',
+  help: 'Total number of messages received',
+  labelNames: ['pipeline_id', 'pod_name']
 });
-register.registerMetric(messageProcessedCounter);
+register.registerMetric(messagesReceivedCounter);
+
+const processorsAppliedCounter = new promClient.Counter({
+  name: 'processors_applied_total',
+  help: 'Total number of times processors were applied to messages',
+  labelNames: ['pipeline_id', 'pod_name', 'processor_name']
+});
+register.registerMetric(processorsAppliedCounter);
+
+const messagesCompletedCounter = new promClient.Counter({
+  name: 'messages_completed_total',
+  help: 'Total number of messages that completed processing',
+  labelNames: ['pipeline_id', 'pod_name']
+});
+register.registerMetric(messagesCompletedCounter);
+
+const messagesErrorCounter = new promClient.Counter({
+  name: 'messages_error_total',
+  help: 'Total number of messages that resulted in an error',
+  labelNames: ['pipeline_id', 'pod_name']
+});
+register.registerMetric(messagesErrorCounter);
+
+const messagesDlqCounter = new promClient.Counter({
+  name: 'messages_dlq_total',
+  help: 'Total number of messages sent to DLQ',
+  labelNames: ['pipeline_id', 'pod_name']
+});
+register.registerMetric(messagesDlqCounter);
+
+const messagesDroppedCounter = new promClient.Counter({
+  name: 'messages_dropped_total',
+  help: 'Total number of messages dropped',
+  labelNames: ['pipeline_id', 'pod_name']
+});
+register.registerMetric(messagesDroppedCounter);
 
 const messageProcessingDuration = new promClient.Histogram({
   name: 'message_processing_duration_seconds',
@@ -20,6 +55,11 @@ promClient.collectDefaultMetrics({ register });
 
 module.exports = {
   register,
-  messageProcessedCounter,
+  messagesReceivedCounter,
+  processorsAppliedCounter,
+  messagesCompletedCounter,
+  messagesErrorCounter,
+  messagesDlqCounter,
+  messagesDroppedCounter,
   messageProcessingDuration
 };
