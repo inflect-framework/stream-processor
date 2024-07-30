@@ -3,6 +3,24 @@
 # Exit immediately if a command exits with a non-zero status.
 set -e
 
+echo
+echo '___________________________________________________________________'
+echo '|                                                                 |'
+echo "|                                                      __________ |"
+echo "|   _____          __  _              _               /         / |"
+echo "|   \\_   \\ _ __   / _|| |  ___   ___ | |_        ____/         /  |"
+echo "|    / /\\/| '_ \\ | |_ | | / _ \\ / __|| __|      /         /\\  /   |"
+echo "| /\\/ /_  | | | ||  _|| ||  __/| (__ | |_      /         /__\\/    |"
+echo "| \\____/  |_| |_||_|  |_| \\___| \\___| \\__|    /         /         |"
+echo "|                                            /_________/          |"
+echo '|                                                                 |'
+echo '|_________________________________________________________________|'
+echo
+echo "Welcome to Inflect!"
+echo "This script will guide you through the deployment process."
+echo "First, specify your Kafka broker information"
+echo
+
 # Function to check if a command exists
 command_exists() {
     command -v "$1" >/dev/null 2>&1
@@ -26,15 +44,35 @@ if [ ! -f .env ]; then
 fi
 source .env
 
+# Function to prompt for new values or use defaults
+prompt_for_value() {
+    local var_name=$1
+    local current_value=${!var_name}
+    local prompt_text=$2
+    
+    read -p "$prompt_text (current: $current_value, press Enter to keep current value): " new_value
+    if [ -n "$new_value" ]; then
+        eval "$var_name=\"$new_value\""
+    fi
+}
+
+# Prompt for new values or use defaults
+prompt_for_value APIKEY "Enter Kafka API Key"
+prompt_for_value APISECRET "Enter Kafka API Secret"
+prompt_for_value BROKER "Enter Kafka Broker URL"
+prompt_for_value REGISTRY_APIKEY "Enter Registry API Key"
+prompt_for_value REGISTRY_APISECRET "Enter Registry API Secret"
+prompt_for_value REGISTRY_URL "Enter Registry URL"
+
 # Validate environment variables
 [[ -z "$DATABASE_URL" ]] && { echo "DATABASE_URL is not set in .env. Aborting." >&2; exit 1; }
 [[ -z "$DUMP_FILE" ]] && { echo "DUMP_FILE is not set in .env. Aborting." >&2; exit 1; }
-[[ -z "$APIKEY" ]] && { echo "APIKEY is not set in .env. Aborting." >&2; exit 1; }
-[[ -z "$APISECRET" ]] && { echo "APISECRET is not set in .env. Aborting." >&2; exit 1; }
-[[ -z "$BROKER" ]] && { echo "BROKER is not set in .env. Aborting." >&2; exit 1; }
-[[ -z "$REGISTRY_APIKEY" ]] && { echo "REGISTRY_APIKEY is not set in .env. Aborting." >&2; exit 1; }
-[[ -z "$REGISTRY_APISECRET" ]] && { echo "REGISTRY_APISECRET is not set in .env. Aborting." >&2; exit 1; }
-[[ -z "$REGISTRY_URL" ]] && { echo "REGISTRY_URL is not set in .env. Aborting." >&2; exit 1; }
+[[ -z "$APIKEY" ]] && { echo "APIKEY is not set. Aborting." >&2; exit 1; }
+[[ -z "$APISECRET" ]] && { echo "APISECRET is not set. Aborting." >&2; exit 1; }
+[[ -z "$BROKER" ]] && { echo "BROKER is not set. Aborting." >&2; exit 1; }
+[[ -z "$REGISTRY_APIKEY" ]] && { echo "REGISTRY_APIKEY is not set. Aborting." >&2; exit 1; }
+[[ -z "$REGISTRY_APISECRET" ]] && { echo "REGISTRY_APISECRET is not set. Aborting." >&2; exit 1; }
+[[ -z "$REGISTRY_URL" ]] && { echo "REGISTRY_URL is not set. Aborting." >&2; exit 1; }
 
 # Check Minikube status
 minikube status || minikube start
