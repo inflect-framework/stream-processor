@@ -1,17 +1,11 @@
 const k8s = require('@kubernetes/client-node');
 const { Kafka, logLevel } = require('kafkajs');
-const { Pool } = require('pg');
 
 const BOOTSTRAP_SERVERS = process.env.KAFKA_BOOTSTRAP_SERVERS;
 const SASL_USERNAME = process.env.KAFKA_SASL_USERNAME;
 const SASL_PASSWORD = process.env.KAFKA_SASL_PASSWORD;
 
 const NAMESPACE = process.env.NAMESPACE;
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
-
 
 const kc = new k8s.KubeConfig();
 kc.loadFromCluster();
@@ -57,22 +51,6 @@ async function scalePartitions(topic, newPartitionCount) {
   }
 }
 
-async function getTopicNameForPipeline(pipelineId) {
-  const query = "SELECT t.topic_name FROM pipelines p JOIN topics t ON p.source_topic_id = t.id WHERE p.id = $1";
-  const values = [pipelineId];
-
-  try {
-    const result = await pool.query(query, values);
-    if (result.rows.length > 0) {
-      return result.rows[0].topic_name;
-    }
-    return null;
-  } catch (error) {
-    console.error('Error querying database:', error);
-    return null;
-  }
-}
-
 async function main() {
   while (true) {
     try {
@@ -83,12 +61,7 @@ async function main() {
           const pipelineId = deployment.metadata.name.split('-')[1];
           const replicaCount = deployment.spec.replicas;
 
-          const topicName = await getTopicNameForPipeline(pipelineId);
-
-          if (!topicName) {
-            console.warn(`No topic found for pipeline ${pipelineId}`);
-            continue;
-          }
+          const topicName = `source_a`
 
           const currentPartitions = await getTopicPartitions(topicName);
 
@@ -100,7 +73,7 @@ async function main() {
             console.log(`Scaling up partitions for topic ${topicName} from ${currentPartitions} to ${replicaCount}`);
             await scalePartitions(topicName, replicaCount);
           } else if (currentPartitions > replicaCount) {
-            console.warn(`Topic ${topicName} has more partitions (${currentPartitions}) than replicas (${replicaCount})`);
+            console.warn(`Topic ${topicName} has more partitions (${currentPartitions}) than replicas (${replicaCount}). Manual intervention may be required.`);
           }
         }
       }
