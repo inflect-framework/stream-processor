@@ -35,4 +35,17 @@ kubectl delete servicemonitors --all -n $NAMESPACE
 echo "Deleting HPAs"
 kubectl delete hpa --all -n $NAMESPACE
 
+echo "Deleting RoleBindings"
+kubectl delete rolebinding partition-scaler-rolebinding -n $NAMESPACE
+
+echo "Deleting Roles"
+kubectl delete role partition-scaler-role -n $NAMESPACE
+
+echo "Deleting ServiceAccounts"
+kubectl delete serviceaccount partition-scaler-sa -n $NAMESPACE
+
+echo "Uninstalling KEDA"
+helm uninstall keda -n keda
+kubectl delete namespace keda
+
 echo "Cleanup completed."

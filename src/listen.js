@@ -4,19 +4,33 @@ const http = require('http');
 const { register } = require('./metrics');
 
 const PIPELINE_ID = process.env.PIPELINE_ID;
+const PORT = process.env.PORT || 3000;
 
 const server = http.createServer(async (req, res) => {
   if (req.url === '/metrics') {
-    res.setHeader('Content-Type', register.contentType);
-    res.end(await register.metrics());
+    try {
+      res.setHeader('Content-Type', register.contentType);
+      res.end(await register.metrics());
+    } catch (error) {
+      console.error('Error while generating metrics', error);
+      res.statusCode = 500;
+      res.end('Internal Server Error');
+    }
+  } else if (req.url === '/health') {
+    res.statusCode = 200;
+    res.end('OK');
   } else {
     res.statusCode = 404;
     res.end('Not Found');
   }
 });
 
-server.listen(3000, () => {
-  console.log('Metrics server is running on port 3000');
+server.listen(PORT, () => {
+  console.log(`Metrics server is running on port ${PORT}`);
+});
+
+server.on('error', (error) => {
+  console.error('HTTP server error', error);
 });
 
 async function main() {
@@ -27,6 +41,7 @@ async function main() {
 
   await handleSpecificPipeline(PIPELINE_ID);
 }
+
 
 async function handleSpecificPipeline(pipelineId) {
   const pipelineQuery = 'SELECT * FROM pipelines WHERE id = $1 AND is_active = true';

@@ -4,7 +4,7 @@ const {
   SchemaRegistry,
   SchemaType,
 } = require("@kafkajs/confluent-schema-registry");
-const { messageCounter } = require("../metrics");
+const { messageCounter } = require("../../src/metrics");
 
 const APIKEY = process.env.APIKEY;
 const APISECRET = process.env.APISECRET;
@@ -48,7 +48,7 @@ const run = async () => {
 
   const produceMessages = async (batchNumber) => {
     const messages = [];
-    for (let i = 0; i < 15000; i++) {
+    for (let i = 0; i < 100; i++) {
       const key = `key-${batchNumber}-${i}`;
       const value = `value-${batchNumber}-${i}`;
       const num = batchNumber * 100 + i;
