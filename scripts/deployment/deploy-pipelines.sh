@@ -74,7 +74,7 @@ prompt_for_value REGISTRY_URL "Enter Registry URL"
 [[ -z "$REGISTRY_URL" ]] && { echo "REGISTRY_URL is not set. Aborting." >&2; exit 1; }
 
 # Check Minikube status
-minikube status || minikube start
+# minikube status || minikube start
 
 # Configure Docker to use Minikube's Docker daemon
 eval $(minikube docker-env)
@@ -120,7 +120,6 @@ PG_SECRET_NAME="inflect-postgres-secrets"
 PG_STORAGE_CLASS="standard"
 PG_STORAGE_SIZE="5Gi"
 
-# Function to deploy Prometheus
 deploy_prometheus() {
     echo "Deploying Prometheus..."
     
@@ -150,19 +149,77 @@ deploy_prometheus() {
     echo "Waiting for Prometheus resources to be fully removed..."
     sleep 15
 
-    # Install Prometheus
+    # Create a values file for Prometheus configuration
+    cat <<EOF > prometheus-values.yaml
+prometheus:
+  prometheusSpec:
+    serviceMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelector:
+      matchLabels:
+        release: prometheus
+    serviceMonitorNamespaceSelector:
+      matchNames:
+        - $NAMESPACE
+    resources:
+      requests:
+        cpu: 500m
+        memory: 2Gi
+      limits:
+        cpu: 1
+        memory: 4Gi
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+    additionalScrapeConfigs:
+      - job_name: 'pipeline-metrics'
+        kubernetes_sd_configs:
+          - role: service
+            namespaces:
+              names:
+                - $NAMESPACE
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_label_app]
+            regex: pipeline-.*
+            action: keep
+          - source_labels: [__meta_kubernetes_service_port_name]
+            regex: metrics
+            action: keep
+          - source_labels: [__meta_kubernetes_service_label_app]
+            target_label: pipeline_id
+            regex: pipeline-(.*)
+            replacement: \$1
+grafana:
+  namespaceOverride: $NAMESPACE
+prometheusOperator:
+  namespaceOverride: $NAMESPACE
+  resources:
+    requests:
+      cpu: 100m
+      memory: 50Mi
+    limits:
+      cpu: 200m
+      memory: 100Mi
+alertmanager:
+  namespaceOverride: $NAMESPACE
+global:
+  rbac:
+    createAggregateClusterRoles: false
+EOF
+
+    # Install Prometheus with the new configuration
     helm install prometheus prometheus-community/kube-prometheus-stack \
         --namespace $NAMESPACE \
         --create-namespace \
-        --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false \
-        --set prometheus.prometheusSpec.serviceMonitorNamespaceSelector.matchNames[0]=$NAMESPACE \
-        --set grafana.namespaceOverride=$NAMESPACE \
-        --set prometheusOperator.namespaceOverride=$NAMESPACE \
-        --set prometheus.namespaceOverride=$NAMESPACE \
-        --set alertmanager.namespaceOverride=$NAMESPACE \
-        --set global.rbac.createAggregateClusterRoles=false
+        -f prometheus-values.yaml
 
     echo "Prometheus deployed successfully."
+
+    # Clean up the temporary values file
+    rm prometheus-values.yaml
 }
 
 # Function to install KEDA
@@ -302,7 +359,7 @@ echo "PostgreSQL deployed and initialized with the provided dump."
 deploy_prometheus
 
 # Install KEDA
-install_or_upgrade_keda
+# install_or_upgrade_keda
 
 # Now proceed with pipeline deployment
 PIPELINES=$(kubectl exec -n $NAMESPACE $PG_POD -- psql -U $DB_USER -d $DB_NAME -t -c "SELECT id FROM pipelines WHERE is_active = true")
@@ -347,12 +404,12 @@ if [ -z "$SOURCE_TOPIC" ]; then
 fi
 
   # Apply ScaledObject
-  sed "s/{{PIPELINE_ID}}/$PIPELINE_ID/g" configs/templates/scaledobject-template.yaml > deployments/pipeline-$PIPELINE_ID-scaledobject.yaml
-  kubectl apply -f deployments/pipeline-$PIPELINE_ID-scaledobject.yaml
+  # sed "s/{{PIPELINE_ID}}/$PIPELINE_ID/g" configs/templates/scaledobject-template.yaml > deployments/pipeline-$PIPELINE_ID-scaledobject.yaml
+  # kubectl apply -f deployments/pipeline-$PIPELINE_ID-scaledobject.yaml
   
   # Apply TriggerAuthentication
-  sed "s/{{PIPELINE_ID}}/$PIPELINE_ID/g" configs/templates/triggerauthentication-template.yaml > deployments/pipeline-$PIPELINE_ID-triggerauth.yaml
-  kubectl apply -f deployments/pipeline-$PIPELINE_ID-triggerauth.yaml
+  # sed "s/{{PIPELINE_ID}}/$PIPELINE_ID/g" configs/templates/triggerauthentication-template.yaml > deployments/pipeline-$PIPELINE_ID-triggerauth.yaml
+  # kubectl apply -f deployments/pipeline-$PIPELINE_ID-triggerauth.yaml
 
 echo "Deployed pipeline $PIPELINE_ID with KEDA autoscaling using source topic: $SOURCE_TOPIC"
 done
@@ -370,77 +427,80 @@ kubectl create secret generic kafka-scripts -n $NAMESPACE \
   --dry-run=client -o yaml | kubectl apply -f -
 
 # Create ServiceAccount for partition-scaler
-kubectl create serviceaccount partition-scaler-sa -n $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+# kubectl create serviceaccount partition-scaler-sa -n $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
 
 # Create Role for partition-scaler
-cat <<EOF | kubectl apply -f -
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  namespace: $NAMESPACE
-  name: partition-scaler-role
-rules:
-- apiGroups: ["apps"]
-  resources: ["deployments"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""]
-  resources: ["pods"]
-  verbs: ["get", "list", "watch"]
-EOF
+# cat <<EOF | kubectl apply -f -
+# apiVersion: rbac.authorization.k8s.io/v1
+# kind: Role
+# metadata:
+#   namespace: $NAMESPACE
+#   name: partition-scaler-role
+# rules:
+# - apiGroups: ["apps"]
+#   resources: ["deployments"]
+#   verbs: ["get", "list", "watch"]
+# - apiGroups: [""]
+#   resources: ["pods"]
+#   verbs: ["get", "list", "watch"]
+# EOF
 
 # Create RoleBinding for partition-scaler
-kubectl create rolebinding partition-scaler-rolebinding \
-  --role=partition-scaler-role \
-  --serviceaccount=$NAMESPACE:partition-scaler-sa \
-  -n $NAMESPACE \
-  --dry-run=client -o yaml | kubectl apply -f -
+# kubectl create rolebinding partition-scaler-rolebinding \
+#   --role=partition-scaler-role \
+#   --serviceaccount=$NAMESPACE:partition-scaler-sa \
+#   -n $NAMESPACE \
+#   --dry-run=client -o yaml | kubectl apply -f -
 
 # Deploy partition-scaler
-echo "Deploying partition-scaler..."
-cat <<EOF | kubectl apply -f -
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: partition-scaler
-  namespace: $NAMESPACE
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: partition-scaler
-  template:
-    metadata:
-      labels:
-        app: partition-scaler
-    spec:
-      serviceAccountName: partition-scaler-sa
-      containers:
-      - name: partition-scaler
-        image: partition-scaler:latest
-        imagePullPolicy: Never
-        env:
-        - name: KAFKA_BOOTSTRAP_SERVERS
-          value: "$BROKER"
-        - name: KAFKA_SASL_USERNAME
-          valueFrom:
-            secretKeyRef:
-              name: kafka-secrets
-              key: apikey
-        - name: KAFKA_SASL_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: kafka-secrets
-              key: apisecret
-        - name: NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
-EOF
+# echo "Deploying partition-scaler..."
+# cat <<EOF | kubectl apply -f -
+# apiVersion: apps/v1
+# kind: Deployment
+# metadata:
+#   name: partition-scaler
+#   namespace: $NAMESPACE
+# spec:
+#   replicas: 1
+#   selector:
+#     matchLabels:
+#       app: partition-scaler
+#   template:
+#     metadata:
+#       labels:
+#         app: partition-scaler
+#     spec:
+#       serviceAccountName: partition-scaler-sa
+#       containers:
+#       - name: partition-scaler
+#         image: partition-scaler:latest
+#         imagePullPolicy: Never
+#         env:
+#         - name: KAFKA_BOOTSTRAP_SERVERS
+#           value: "$BROKER"
+#         - name: KAFKA_SASL_USERNAME
+#           valueFrom:
+#             secretKeyRef:
+#               name: kafka-secrets
+#               key: apikey
+#         - name: KAFKA_SASL_PASSWORD
+#           valueFrom:
+#             secretKeyRef:
+#               name: kafka-secrets
+#               key: apisecret
+#         - name: NAMESPACE
+#           valueFrom:
+#             fieldRef:
+#               fieldPath: metadata.namespace
+# EOF
 
 # Wait for partition-scaler deployment to be ready
-echo "Waiting for partition-scaler deployment to be ready..."
-kubectl rollout status deployment/partition-scaler -n $NAMESPACE
+# echo "Waiting for partition-scaler deployment to be ready..."
+# kubectl rollout status deployment/partition-scaler -n $NAMESPACE
 
-echo "Partition-scaler deployed successfully."
+# echo "Partition-scaler deployed successfully."
+
+kubectl delete deployment pipeline-11 -n inflect
+kubectl delete deployment pipeline-12 -n inflect
 
 echo "Deployment process completed."
